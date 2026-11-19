@@ -1,0 +1,5 @@
+# ROM images are not part of the repository
+*.bin
+*.BIN
+*.bin_
+.DS_Store

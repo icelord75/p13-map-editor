@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>P13 Map Editor</title>
+<meta name="description" content="Браузерный редактор карт топлива и зажигания для ЭБУ Honda Prelude P13 (OKI M66911): открыть .bin, изменить, скачать с исправленной контрольной суммой.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a7286'/%3E%3Cpath d='M6 24 L12 14 L17 19 L26 8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: instrument-panel tool — top status bar, table index on the left, editor on the right; stacks on phones. */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --sunken:#e4e9ee; --ink:#15202a; --muted:#5a6976; --line:#d2dae1;
+  --accent:#0a7286; --accent-ink:#ffffff; --changed:#c77800; --ref:#7a4fd0; --bad:#c0392b; --good:#1f8a4c;
+  --heat-s:78%; --heat-l:72%; --heat-ink:#10181f;
+  --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-data:"JetBrains Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151b; --surface:#161e26; --sunken:#0b1116; --ink:#e3eaf0; --muted:#8c9ba8; --line:#27333e;
+  --accent:#35bdd2; --accent-ink:#06222a; --changed:#f0a531; --ref:#a98bf0; --bad:#ef6b5b; --good:#4cc683;
+  --heat-s:55%; --heat-l:34%; --heat-ink:#f2f6f9; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151b; --surface:#161e26; --sunken:#0b1116; --ink:#e3eaf0; --muted:#8c9ba8; --line:#27333e;
+  --accent:#35bdd2; --accent-ink:#06222a; --changed:#f0a531; --ref:#a98bf0; --bad:#ef6b5b; --good:#4cc683;
+  --heat-s:55%; --heat-l:34%; --heat-ink:#f2f6f9; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-data);font-variant-numeric:tabular-nums}
+
+header.bar{flex:0 0 auto;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+  padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.brand{display:flex;align-items:baseline;gap:8px}
+.brand b{font-family:var(--f-display);font-weight:700;font-size:22px;letter-spacing:.02em}
+.brand span{font-family:var(--f-data);font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.file{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 260px}
+.file .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{font-family:var(--f-data);font-size:11.5px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:var(--sunken);white-space:nowrap}
+.pill.ok{border-color:color-mix(in srgb,var(--good) 55%,transparent);color:var(--good)}
+.pill.bad{border-color:color-mix(in srgb,var(--bad) 55%,transparent);color:var(--bad)}
+.pill.chg{border-color:color-mix(in srgb,var(--changed) 60%,transparent);color:var(--changed)}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.btn{border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.small{padding:3px 9px;font-size:13px}
+label.btn input{display:none}
+
+main.wrap{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:0}
+section.pane{overflow:auto}
+@media (max-width:820px){body{display:block;height:auto} main.wrap{grid-template-columns:minmax(0,1fr)} aside.index{max-height:45vh;border-right:0;border-bottom:1px solid var(--line)} section.pane{overflow:visible}}
+aside.index{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-width:0;min-height:0}
+.search{padding:12px max(16px,env(safe-area-inset-left,0px)) 8px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line)}
+.search input[type=search]{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;font-size:12.5px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:2px 9px;cursor:pointer;background:transparent}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.list{overflow:auto;padding:4px 0 16px}
+.grp{font-family:var(--f-display);font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:12px 16px 4px}
+button.grp{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;text-align:left;cursor:pointer}
+button.grp:hover{color:var(--ink)}
+button.grp .chev{display:inline-block;width:10px;transition:transform .15s;font-family:var(--f-data)}
+button.grp[aria-expanded="false"] .chev{transform:rotate(-90deg)}
+button.grp .cnt{margin-left:auto;font-family:var(--f-data);font-size:11px;letter-spacing:0;text-transform:none;display:flex;gap:6px;align-items:center}
+button.grp.const{color:var(--accent)}
+.listtools{display:flex;gap:6px;justify-content:flex-end;font-size:12px}
+.listtools button{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
+.listtools button:hover{color:var(--ink)}
+.item{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:8px;align-items:baseline;padding:5px 16px;cursor:pointer;border-left:3px solid transparent}
+.item:hover{background:var(--sunken)}
+.item[aria-current="true"]{background:color-mix(in srgb,var(--accent) 12%,transparent);border-left-color:var(--accent)}
+.item .ad{font-family:var(--f-data);font-size:11.5px;color:var(--muted)}
+.item .nm{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .mk{font-size:11px;font-family:var(--f-data);display:flex;gap:4px;align-items:center}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.dot.chg{background:var(--changed)} .dot.ref{background:var(--ref)}
+.conf{color:var(--muted)}
+
+section.pane{min-width:0;padding-block:18px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+.titlebar h1{font-family:var(--f-display);font-weight:700;font-size:28px;line-height:1.1;margin:0;text-wrap:balance}
+.titlebar .meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted);font-size:13px;margin-top:6px}
+.titlebar .note{margin-top:8px;max-width:72ch;color:var(--muted)}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.tools .sep{width:1px;align-self:stretch;background:var(--line)}
+.tools input[type=number]{width:90px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.tools .hint{color:var(--muted);font-size:12.5px}
+.scroll{overflow-x:auto;max-width:100%}
+table.grid{border-collapse:separate;border-spacing:2px;font-family:var(--f-data);font-variant-numeric:tabular-nums;font-size:12.5px;user-select:none}
+table.grid th{font-weight:600;color:var(--muted);padding:3px 6px;text-align:right;white-space:nowrap;font-size:11.5px}
+table.grid thead th{text-align:center}
+table.grid td{min-width:44px;height:28px;text-align:center;border-radius:3px;cursor:cell;position:relative;color:var(--heat-ink);padding:0 4px}
+table.grid td.sel{outline:2px solid var(--ink);outline-offset:-2px;z-index:1}
+table.grid td.cur{outline:2px solid var(--accent);outline-offset:-2px;z-index:2}
+table.grid td.chg::after,table.pts td.chg::after{content:"";position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--changed);box-shadow:0 0 0 1px var(--surface)}
+table.grid td.rdf::before,table.pts td.rdf::before{content:"";position:absolute;bottom:2px;left:2px;width:6px;height:6px;border-radius:1px;background:var(--ref);box-shadow:0 0 0 1px var(--surface)}
+table.grid td input,table.pts td input{width:100%;height:100%;border:0;text-align:center;background:var(--surface);color:var(--ink);font:inherit;padding:0}
+.axisnote{color:var(--muted);font-size:12.5px}
+.split{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:980px){.split{grid-template-columns:minmax(0,1fr)}}
+table.pts{border-collapse:collapse;font-family:var(--f-data);font-variant-numeric:tabular-nums;font-size:13px}
+table.pts th{font-size:11.5px;color:var(--muted);text-align:right;padding:4px 10px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+table.pts td{padding:0;height:28px;min-width:76px;text-align:right;border-bottom:1px solid var(--line);position:relative}
+table.pts td.ro{color:var(--muted);padding:0 10px}
+table.pts td.ed{cursor:text}
+table.pts td.ed span{display:block;padding:0 10px}
+table.pts td.ed:hover{background:var(--sunken)}
+table.pts tr.hd td{color:var(--muted)}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
+.chart svg{display:block;width:100%;height:auto}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.panel h2{font-family:var(--f-display);font-size:17px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 8px;color:var(--muted);font-weight:600}
+.changes{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow:auto}
+.changes button{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:8px;text-align:left;border:0;background:transparent;padding:4px 6px;border-radius:4px;cursor:pointer}
+.changes button:hover{background:var(--sunken)}
+.changes .ad{font-family:var(--f-data);color:var(--muted);font-size:12px}
+.changes .n{font-family:var(--f-data);color:var(--changed);font-size:12px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:36px 20px;display:flex;flex-direction:column;gap:12px;align-items:flex-start;background:var(--surface);max-width:760px}
+.drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.drop h1{font-family:var(--f-display);font-size:34px;margin:0;line-height:1.05}
+.drop p{margin:0;color:var(--muted);max-width:64ch}
+.drop ul{margin:0;padding-left:18px;color:var(--muted)}
+.drop a{color:var(--accent)}
+.msg{padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);max-width:760px}
+.msg.err{border-color:var(--bad);color:var(--bad)}
+.msg.warn{border-color:var(--changed)}
+.hexwrap{font-family:var(--f-data);font-size:12.5px}
+table.hex{border-collapse:separate;border-spacing:1px}
+table.hex th{color:var(--muted);font-weight:600;font-size:11.5px;padding:2px 6px;text-align:right}
+table.hex td{width:30px;height:24px;text-align:center;position:relative;cursor:text;border-radius:2px}
+table.hex td:hover{background:var(--sunken)}
+table.hex td.chg{color:var(--changed);font-weight:600}
+table.hex td input{width:30px;height:24px;border:0;text-align:center;background:var(--surface);color:var(--ink);font:inherit;padding:0}
+.toast{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--surface);padding:10px 14px;border-radius:8px;max-width:min(420px,calc(100vw - 32px));z-index:20;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.legend{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.legend .ramp{width:140px;height:10px;border-radius:3px}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+.toggle{display:flex;gap:8px;align-items:center;cursor:pointer}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><b>P13 Map Editor</b><span>OKI M66911 · 32K</span></div>
+  <div class="file"><span class="name" id="fname">Файл не загружен</span><div class="pills" id="pills"></div></div>
+  <div class="actions">
+    <label class="btn" for="fileIn">Открыть .bin<input type="file" id="fileIn" accept=".bin,.BIN,application/octet-stream"></label>
+    <label class="btn" for="refIn" id="refLbl">Эталон для сравнения<input type="file" id="refIn" accept=".bin,.BIN,application/octet-stream"></label>
+    <button class="btn" id="undoBtn" disabled title="Ctrl+Z">Отменить</button>
+    <button class="btn" id="redoBtn" disabled title="Ctrl+Shift+Z">Повторить</button>
+    <button class="btn primary" id="saveBtn" disabled>Скачать прошивку</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <aside class="index" aria-label="Список таблиц">
+    <div class="search">
+      <input type="search" id="q" placeholder="Поиск: адрес или название (например 63F8, VTEC)">
+      <div class="filters" id="filters">
+        <button class="chip" data-f="main" aria-pressed="false">Основные</button>
+        <button class="chip" data-f="chg" aria-pressed="false">Изменённые</button>
+        <button class="chip" data-f="ref" aria-pressed="false">Отличия от эталона</button>
+      </div>
+      <div class="listtools"><button id="expAll">Развернуть все</button><button id="colAll">Свернуть все</button></div>
+    </div>
+    <div class="list" id="list"></div>
+  </aside>
+  <section class="pane" id="pane"></section>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+// tables whose purpose is not established ("?") are hidden for now; they stay reachable through "Произвольный адрес"
+const CATALOG = [{"a":3105,"f":"w","n":2,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов: начальный порог возобновления (в коде)","c":"✔","d":"операнд MOV 0x16C,#imm в инициализации (0x0C1E); стоково 250 = 7500 об/мин. В JDM совпадает с 0x540B; в USDM таблица 0x540B другая (224 = 8370), а здесь 7500 — менять вместе с 0x540B. Ab0VE ставит 205 (9146)","u":"","hi":false},{"a":3110,"f":"w","n":2,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов: начальный порог отсечки (в коде)","c":"✔","d":"операнд MOV 0x16A,#imm (0x0C23); стоково 244 = 7684 об/мин — совпадает с отсечкой H22A2 по мануалу (7700). Менять вместе с 0x540F. Ab0VE ставит 197 (9518)","u":"","hi":false},{"a":11948,"f":"raw","n":1,"x":"VSS","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель скорости, км/ч","c":"✔","d":"CMPB 0xDF,#imm (0x2EA9); JDM — 180 км/ч, USDM и тюны — 255 (фактически выключен)","u":"kmh","hi":false},{"a":13770,"f":"raw","n":1,"x":"ECT","g":"4. VTEC и ограничитель оборотов","t":"VTEC: максимальное сырое значение ECT (чем больше — тем холоднее можно)","c":"✔","d":"LB A,#imm; CMPB A,0xD9 (0x35C9): VTEC разрешён при ECT ≤ этого значения. Стоково 0x44 = 68 ≈ 59 °C (оценка); 0xFF — проверка отключена (Ab0VE)","u":"ect","hi":false},{"a":20480,"f":"v0","n":44,"x":"","g":"3. Зажигание: коррекции","t":"Накопление в катушке: коэффициент по оборотам","c":"~","d":"0x2A7 × 0x2A8 → 0x2A9 (ограничено 0x0E…0xD0)","u":"","hi":false},{"a":20524,"f":"v0","n":26,"x":"VBAT","g":"3. Зажигание: коррекции","t":"Накопление в катушке: коэффициент по напряжению","c":"~","d":"0x2A8, вместе с 0x5000 даёт 0x2A9 — параметр начала зарядки катушки в формуле 0x46FB","u":"","hi":false},{"a":20550,"f":"v0","n":44,"x":"RPMb","g":"3. Зажигание: коррекции","t":"Компенсация задержки расчёта угла по оборотам","c":"~","d":"0x2B7 прибавляется к итоговому углу; растёт с оборотами (0 при ≤1000, 52 ед. ≈ 12° при ~8000 об/мин) — компенсирует время между расчётом и искрой","u":"deg","hi":false},{"a":20594,"f":"v0","n":12,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x2B1","c":"?","d":"","u":"","hi":false},{"a":20606,"f":"v2b","n":4,"x":"","g":"3. Зажигание: коррекции","t":"Таблица от 0x2B0 (2 точки)","c":"?","d":"","u":"","hi":false},{"a":20610,"f":"raw","n":4,"x":"","g":"3. Зажигание: коррекции","t":"Коррекция угла по ECT: две точки по MAP","c":"~","d":"x-точки (MAP) для интерполяции между значениями из 0x5086/0x5094 (или 0x50A2/0x50B0) → 0x2B2, прибавляется к углу","u":"","hi":false},{"a":20614,"f":"v0","n":14,"x":"ECT","g":"3. Зажигание: коррекции","t":"Коррекция угла по ECT: холодный мотор (ECT ≥ 0x28), при низкой нагрузке","c":"~","d":"значения по ECT → 0x278/0x279, интерполируются по MAP с точками 0x5082 → 0x2B2 (код 0x12B4, 0x23C7). Мануал: «угол корректируется по температуре ОЖ»","u":"","hi":false},{"a":20628,"f":"v0","n":14,"x":"ECT","g":"3. Зажигание: коррекции","t":"Коррекция угла по ECT: холодный мотор, при высокой нагрузке","c":"~","d":"значения по ECT → 0x278/0x279, интерполируются по MAP с точками 0x5082 → 0x2B2 (код 0x12B4, 0x23C7). Мануал: «угол корректируется по температуре ОЖ»","u":"","hi":true},{"a":20642,"f":"v0","n":14,"x":"ECT","g":"3. Зажигание: коррекции","t":"Коррекция угла по ECT: прогретый мотор (ECT < 0x28), при низкой нагрузке","c":"~","d":"значения по ECT → 0x278/0x279, интерполируются по MAP с точками 0x5082 → 0x2B2 (код 0x12B4, 0x23C7). Мануал: «угол корректируется по температуре ОЖ»","u":"","hi":false},{"a":20656,"f":"v0","n":14,"x":"ECT","g":"3. Зажигание: коррекции","t":"Коррекция угла по ECT: прогретый мотор, при высокой нагрузке","c":"~","d":"значения по ECT → 0x278/0x279, интерполируются по MAP с точками 0x5082 → 0x2B2 (код 0x12B4, 0x23C7). Мануал: «угол корректируется по температуре ОЖ»","u":"","hi":true},{"a":20670,"f":"v0","n":10,"x":"RPMb","g":"3. Зажигание: коррекции","t":"Порог по оборотам (сравнивается с TPS 0xE7)","c":"?","d":"","u":"","hi":false},{"a":20680,"f":"w16","n":20,"x":"","g":"3. Зажигание: коррекции","t":"Поправка угла при изменении нагрузки (рост)","c":"?","d":"код 0x2387, вход — модуль изменения нагрузки; результат участвует в расчёте угла","u":"","hi":false},{"a":20700,"f":"w16","n":20,"x":"","g":"3. Зажигание: коррекции","t":"Поправка угла при изменении нагрузки (спад)","c":"?","d":"код 0x2387, вход — модуль изменения нагрузки; результат участвует в расчёте угла","u":"","hi":false},{"a":20720,"f":"v0","n":10,"x":"","g":"2. Топливо: коррекции","t":"Таблица кода 0x205D (при отсутствии ошибок TPS/MAP)","c":"?","d":"","u":"","hi":false},{"a":20730,"f":"v0","n":8,"x":"VSS","g":"3. Зажигание: коррекции","t":"АКПП: снижение угла на время переключения — начальный коэффициент по скорости","c":"~","d":"0x2BA умножает значение угла (×/256) только в особом режиме по флагам 0x229 (горячий двигатель, RPM-байт > 0x53/0x60); затем нарастает на 0x2BC до переполнения и отключается. В обычной работе 0x2BA = 0","u":"","hi":false},{"a":20738,"f":"v0","n":8,"x":"VSS","g":"3. Зажигание: коррекции","t":"АКПП: снижение угла на время переключения — шаг нарастания по скорости","c":"~","d":"0x2BC, прибавляется к 0x2BA на каждом шаге","u":"","hi":false},{"a":20746,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (выс. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":true},{"a":20766,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (выс. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":true},{"a":20786,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (низк. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":false},{"a":20806,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (низк. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":false},{"a":20826,"f":"v0","n":14,"x":"","g":"3. Зажигание: коррекции","t":"Таблица от 0x2A2 (сравнивается с TPS 0xE7)","c":"?","d":"","u":"","hi":false},{"a":20840,"f":"v0","n":14,"x":"RPMb","g":"3. Зажигание: коррекции","t":"Коррекция по оборотам (с 0x2A5)","c":"?","d":"","u":"","hi":false},{"a":20854,"f":"raw","n":5,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по индексу (код 0x1684) → 0x2A4/0x2A5","c":"?","d":"","u":"","hi":false},{"a":20859,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Предел снижения угла (вероятно, по детонации) по строке RPM, выс. кул.","c":"~","d":"ограничивает накопленное снижение угла 0x2AB (код 0x2474, флаги 0x21C.5/.7); 0x2AB затем восстанавливается шагами по 2","u":"","hi":true},{"a":20879,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Предел снижения угла (вероятно, по детонации) по строке RPM, низк. кул.","c":"~","d":"ограничивает накопленное снижение угла 0x2AB (код 0x2474, флаги 0x21C.5/.7); 0x2AB затем восстанавливается шагами по 2","u":"","hi":false},{"a":20899,"f":"raw","n":9,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по индексу (код 0x3480)","c":"?","d":"","u":"","hi":false},{"a":20908,"f":"raw","n":7,"x":"MAP","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Множители для пересчёта MAP→нагрузка 0xE3 (по диапазонам MAP 0x40/0x60)","c":"~","d":"код 0x21B0","u":"","hi":false},{"a":20915,"f":"raw","n":6,"x":"MAP","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Ограничения нагрузки 0xE3 (min/max)","c":"~","d":"","u":"","hi":false},{"a":20921,"f":"raw","n":8,"x":"","g":"2. Топливо: коррекции","t":"Таблица кода 0x30D9","c":"?","d":"","u":"","hi":false},{"a":20929,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17A","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":20943,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17B","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":20957,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17C","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":20971,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17D","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":20985,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17E","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":20999,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x17F","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":21013,"f":"v1","n":21,"x":"IAT","g":"2. Топливо: коррекции","t":"Коррекция топлива по IAT","c":"✔","d":"0x152, 16 бит; множитель в произведении 0x150 (код 0x315A) и в ускорительной добавке","u":"","hi":false},{"a":21034,"f":"v1","n":21,"x":"ECT","g":"2. Топливо: коррекции","t":"Коррекция топлива по ECT (16 бит)","c":"~","d":"0x158 → 0x15E, множитель в произведении длительности впрыска 0x150 (код 0x317B); по умолчанию 0x2000","u":"","hi":false},{"a":21055,"f":"v2","n":4,"x":"IAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Порог по IAT (при скорости < 15 км/ч), сравнивается с ECT","c":"?","d":"","u":"","hi":false},{"a":21059,"f":"v2","n":4,"x":"IAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Порог по IAT (при скорости ≥ 15 км/ч)","c":"?","d":"","u":"","hi":false},{"a":21063,"f":"w","n":2,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Константа 16 бит (код 0x471B/0x4815)","c":"?","d":"","u":"","hi":false},{"a":21065,"f":"w","n":10,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица слов (код 0x478B) — МКПП","c":"?","d":"выбор 5249/5253 по 0x220.0 Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21075,"f":"w","n":10,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица слов — АКПП","c":"?","d":"Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21085,"f":"raw","n":5,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица байт (код 0x482B) — МКПП","c":"?","d":"выбор 525D/5262 по 0x220.0 Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21090,"f":"raw","n":5,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица байт — АКПП","c":"?","d":"Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21095,"f":"v0","n":16,"x":"RPMb","g":"2. Топливо: коррекции","t":"Порог MAP по оборотам → флаг 0x11C.6 (граница режима по нагрузке)","c":"?","d":"стоково ~89 кПа до 3000 об/мин, 43 при 6000, 17 при 8000; вероятно, граница работы по O2 или зона обогащения (код 0x2BF0)","u":"","hi":false},{"a":21111,"f":"v0","n":16,"x":"RPMb","g":"2. Топливо: коррекции","t":"Коррекция угла по оборотам (код 0x2C18), вычитается 0x19A","c":"?","d":"","u":"","hi":false},{"a":21127,"f":"v2","n":4,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x19A","c":"~","d":"","u":"","hi":false},{"a":21131,"f":"v0","n":12,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x199","c":"~","d":"","u":"","hi":false},{"a":21143,"f":"v0","n":14,"x":"ECT","g":"2. Топливо: коррекции","t":"Отсечка при торможении: обороты, включение отсечки, по ECT — МКПП","c":"~","d":"значение — RPM-байт; стоково на прогретом моторе ~1250 об/мин (отсечка) и ~850–900 (возобновление), на холодном до ~2300. Мануал: отсечка при торможении выше 1100–1400 об/мин. Пары A/B — МКПП/АКПП (0x220.0) Используется при 0x220.0 = 0 (МКПП).","u":"rpmb","hi":false},{"a":21157,"f":"v0","n":14,"x":"ECT","g":"2. Топливо: коррекции","t":"Отсечка при торможении: обороты, возобновление подачи, по ECT — МКПП","c":"~","d":"значение — RPM-байт; стоково на прогретом моторе ~1250 об/мин (отсечка) и ~850–900 (возобновление), на холодном до ~2300. Мануал: отсечка при торможении выше 1100–1400 об/мин. Пары A/B — МКПП/АКПП (0x220.0) Используется при 0x220.0 = 0 (МКПП).","u":"rpmb","hi":false},{"a":21171,"f":"v0","n":14,"x":"ECT","g":"2. Топливо: коррекции","t":"Отсечка при торможении: обороты, включение отсечки, по ECT — АКПП","c":"~","d":"значение — RPM-байт; стоково на прогретом моторе ~1250 об/мин (отсечка) и ~850–900 (возобновление), на холодном до ~2300. Мануал: отсечка при торможении выше 1100–1400 об/мин. Пары A/B — МКПП/АКПП (0x220.0) Используется при 0x220.0 = 1 (АКПП).","u":"rpmb","hi":false},{"a":21185,"f":"v0","n":14,"x":"ECT","g":"2. Топливо: коррекции","t":"Отсечка при торможении: обороты, возобновление подачи, по ECT — АКПП","c":"~","d":"значение — RPM-байт; стоково на прогретом моторе ~1250 об/мин (отсечка) и ~850–900 (возобновление), на холодном до ~2300. Мануал: отсечка при торможении выше 1100–1400 об/мин. Пары A/B — МКПП/АКПП (0x220.0) Используется при 0x220.0 = 1 (АКПП).","u":"rpmb","hi":false},{"a":21215,"f":"raw","n":4,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x338D","c":"?","d":"","u":"","hi":false},{"a":21219,"f":"v0","n":12,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x189","c":"~","d":"","u":"","hi":false},{"a":21231,"f":"v0","n":12,"x":"MAP","g":"2. Топливо: коррекции","t":"Член по MAP для расчёта впрыска","c":"~","d":"0x154 = таблица(MAP) × барокоррекция 0x189 + 0x200; входит множителем в длительность впрыска (код 0x30FD)","u":"","hi":false},{"a":21243,"f":"v1","n":21,"x":"VBAT","g":"2. Топливо: коррекции","t":"Время открытия форсунок (dead time) по напряжению","c":"✔","d":"0x142 прибавляется к каждой длительности впрыска (коды 0x050F, 0x2A77, 0x32DF, 0x333B). Мс — при шаге таймера форсунок 4 мкс (кварц 16 МГц, оценка)","u":"ms4","hi":false},{"a":21264,"f":"v3","n":30,"x":"TPS","g":"2. Топливо: коррекции","t":"Ускорительное обогащение по скорости изменения TPS","c":"~","d":"0x146 — добавочный импульс, дальше умножается на поправки 0x181/0x186/0x17F/0x152","u":"","hi":false},{"a":21294,"f":"raw","n":24,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x4933","c":"?","d":"","u":"","hi":false},{"a":21318,"f":"v2","n":4,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x186","c":"~","d":"","u":"","hi":false},{"a":21322,"f":"v0","n":12,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x185","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":21334,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x187","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":21348,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x188","c":"~","d":"группа из 9 таблиц (код 0x132C–0x1367): пусковое и прогревочное обогащение / коэффициенты по температуре","u":"","hi":false},{"a":21362,"f":"v2","n":4,"x":"MAP","g":"3. Зажигание: коррекции","t":"Задержка по MAP (счётчик r2) для переключения на доп. карты","c":"?","d":"устанавливает флаг 0x218.4","u":"","hi":false},{"a":21366,"f":"v2","n":4,"x":"MAP","g":"3. Зажигание: коррекции","t":"Задержка по MAP (счётчик r3)","c":"?","d":"","u":"","hi":false},{"a":21370,"f":"v1","n":21,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Базовая длительность впрыска при пуске по ECT (16 бит)","c":"~","d":"0x13E в режиме пуска (код 0x2A35); дальше × коэффициент по оборотам 0x6A2A и барокоррекция, + время открытия форсунки, во все цилиндры","u":"","hi":false},{"a":21395,"f":"v2","n":4,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x183","c":"~","d":"","u":"","hi":false},{"a":21399,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Целевые обороты ХХ по ECT — МКПП","c":"~","d":"значения — RPM-байт: стоково ~2100 об/мин на холодную и ~900–950 на прогретом моторе (≥ ~76 °C). Мануал: ХХ H22A1 700 ± 50 (М/Т) с отключённым EACV Используется при 0x220.0 = 0 (МКПП).","u":"rpmb","hi":false},{"a":21413,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Целевые обороты ХХ по ECT — АКПП","c":"~","d":"значения — RPM-байт: стоково ~2100 об/мин на холодную и ~900–950 на прогретом моторе (≥ ~76 °C). Мануал: ХХ H22A1 700 ± 50 (М/Т) с отключённым EACV Используется при 0x220.0 = 1 (АКПП).","u":"rpmb","hi":false},{"a":21427,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Вторые обороты по ECT (верхний порог ХХ?) — МКПП","c":"~","d":"значения — RPM-байт: стоково ~2100 об/мин на холодную и ~900–950 на прогретом моторе (≥ ~76 °C). Мануал: ХХ H22A1 700 ± 50 (М/Т) с отключённым EACV Используется при 0x220.0 = 0 (МКПП).","u":"rpmb","hi":false},{"a":21441,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Вторые обороты по ECT (верхний порог ХХ?) — АКПП","c":"~","d":"значения — RPM-байт: стоково ~2100 об/мин на холодную и ~900–950 на прогретом моторе (≥ ~76 °C). Мануал: ХХ H22A1 700 ± 50 (М/Т) с отключённым EACV Используется при 0x220.0 = 1 (АКПП).","u":"rpmb","hi":false},{"a":21455,"f":"v0","n":12,"x":"RPMb","g":"2. Топливо: коррекции","t":"Отсечка при торможении: порог MAP по оборотам, низк. кул.","c":"~","d":"отсечка разрешена, когда MAP-байт ниже (значение − барокоррекция 0x197); флаг 0x11C.0, множитель 0x18A (код 0x2DEF, 0x2FBB)","u":"","hi":false},{"a":21467,"f":"v0","n":12,"x":"RPMb","g":"2. Топливо: коррекции","t":"Отсечка при торможении: порог MAP по оборотам, выс. кул.","c":"~","d":"отсечка разрешена, когда MAP-байт ниже (значение − барокоррекция 0x197); флаг 0x11C.0, множитель 0x18A (код 0x2DEF, 0x2FBB)","u":"","hi":true},{"a":21479,"f":"v0","n":12,"x":"RPMb","g":"2. Топливо: коррекции","t":"Отсечка при торможении: порог MAP по оборотам, низк. кул., второй вариант","c":"~","d":"отсечка разрешена, когда MAP-байт ниже (значение − барокоррекция 0x197); флаг 0x11C.0, множитель 0x18A (код 0x2DEF, 0x2FBB)","u":"","hi":false},{"a":21491,"f":"v0","n":12,"x":"RPMb","g":"2. Топливо: коррекции","t":"Отсечка при торможении: порог MAP по оборотам, выс. кул., второй вариант","c":"~","d":"отсечка разрешена, когда MAP-байт ниже (значение − барокоррекция 0x197); флаг 0x11C.0, множитель 0x18A (код 0x2DEF, 0x2FBB)","u":"","hi":true},{"a":21503,"f":"v2","n":4,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x197","c":"~","d":"","u":"","hi":false},{"a":21507,"f":"w","n":4,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов, низкие кул.: [порог, крутизна]","c":"~","d":"пара порогов 0x16C/0x16A; период → об/мин = 1 875 000 / x","u":"","hi":false},{"a":21511,"f":"w","n":4,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов, низкие кул.: второй порог","c":"~","d":"","u":"","hi":false},{"a":21515,"f":"w","n":4,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов, высокие кул. (VTEC вкл.): [порог, крутизна]","c":"~","d":"","u":"","hi":true},{"a":21519,"f":"w","n":4,"x":"","g":"4. VTEC и ограничитель оборотов","t":"Ограничитель оборотов, высокие кул.: второй порог","c":"~","d":"","u":"","hi":true},{"a":21523,"f":"w","n":24,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Множитель топлива по ступени кодирующего резистора (АЦП 0x3D4)","c":"~","d":"слово → 0x162 (множитель в длительности впрыска); если в 0x7FF0 выставлен бит опции, вместо ступеней используется плавное значение IMA (0x162 = 0x8000, поправка → 0x2B3)","u":"","hi":false},{"a":21547,"f":"raw","n":24,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Добавка к управлению EACV по ступени резистора (АЦП 0x3DD) — АКПП","c":"~","d":"слова → 0x166/0x164, прибавляются к току клапана ХХ (код 0x4775); пары выбираются битом МКПП/АКПП 0x220.0 и флагом 0x21F.3 Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21571,"f":"raw","n":24,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Добавка к управлению EACV по ступени резистора (АЦП 0x3DD) — МКПП","c":"~","d":"слова → 0x166/0x164, прибавляются к току клапана ХХ (код 0x4775); пары выбираются битом МКПП/АКПП 0x220.0 и флагом 0x21F.3 Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21595,"f":"raw","n":4,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Пороги (поиск индекса, код 0x1676)","c":"?","d":"","u":"","hi":false},{"a":21599,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x260 — МКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21626,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x260 — АКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21653,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x268 — МКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21680,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x268 — АКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21707,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x262 — МКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":21734,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x262 — АКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":21761,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Параметр по ECT → 0x295","c":"?","d":"","u":"","hi":false},{"a":21775,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Параметр по ECT → 0x295 (вариант)","c":"?","d":"","u":"","hi":false},{"a":21789,"f":"v1","n":21,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битный параметр по ECT (код 0x147C)","c":"?","d":"","u":"","hi":false},{"a":21810,"f":"v1","n":21,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битный параметр по ECT (код 0x144F)","c":"?","d":"","u":"","hi":false},{"a":21831,"f":"raw","n":3,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Константы (код 0x3F99)","c":"?","d":"","u":"","hi":false},{"a":21834,"f":"raw","n":3,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Константы (код 0x3FA1)","c":"?","d":"","u":"","hi":false},{"a":21837,"f":"v0","n":2,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Короткая таблица по ECT (код 0x3F70)","c":"?","d":"","u":"","hi":false},{"a":21840,"f":"raw","n":4,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Константы (код 0x3F66)","c":"?","d":"","u":"","hi":false},{"a":21844,"f":"raw","n":4,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Пороги (код 0x14D0/0x40E5)","c":"?","d":"","u":"","hi":false},{"a":21848,"f":"w","n":2,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Константа, 16 бит (используется в 6 местах)","c":"?","d":"","u":"","hi":false},{"a":21850,"f":"w","n":2,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Константа, 16 бит (значение по умолчанию для 0x30E)","c":"?","d":"","u":"","hi":false},{"a":21852,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Параметр по ECT (код 0x3E11)","c":"?","d":"","u":"","hi":false},{"a":21866,"f":"v1","n":21,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битный параметр по ECT (код 0x3E29)","c":"?","d":"","u":"","hi":false},{"a":21887,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Параметр по ECT → 0x2F6","c":"?","d":"","u":"","hi":false},{"a":21901,"f":"v0","n":14,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"Параметр по ECT (код 0x3E3B)","c":"?","d":"","u":"","hi":false},{"a":21915,"f":"v0","n":10,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"Коэффициент по оборотам (код 0x3BCD)","c":"?","d":"блок 0x3BA0 использует АЦП-канал 6 (0xDC, вероятно ELD) × таблицы по оборотам","u":"","hi":false},{"a":21925,"f":"v0","n":10,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"Коэффициент по оборотам × 0xDC (код 0x3BB1)","c":"?","d":"","u":"","hi":false},{"a":21935,"f":"v1","n":18,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная таблица от произведения (код 0x3BC8)","c":"?","d":"","u":"","hi":false},{"a":21953,"f":"v1","n":15,"x":"IAT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по IAT → 0x242","c":"?","d":"","u":"","hi":false},{"a":21968,"f":"v0","n":10,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица по оборотам (код 0x3C7C)","c":"?","d":"","u":"","hi":false},{"a":21978,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x23E","c":"~","d":"","u":"","hi":false},{"a":22005,"f":"w16","n":20,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица 16/16 бит (код 0x3CEB)","c":"?","d":"","u":"","hi":false},{"a":22052,"f":"v1","n":24,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная по оборотам → 0x25E, низкие кул.","c":"?","d":"только при скорости ≥5 км/ч","u":"","hi":false},{"a":22076,"f":"v1","n":24,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная по оборотам → 0x25E, высокие кул.","c":"?","d":"","u":"","hi":true},{"a":22100,"f":"v2","n":4,"x":"BARO","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Барокоррекция → 0x299","c":"~","d":"","u":"","hi":false},{"a":22104,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x264 — МКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":22131,"f":"v1","n":27,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x264 — АКПП","c":"~","d":"вероятно, параметры холостого хода/IACV для МКПП/АКПП Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":22158,"f":"w16","n":36,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица 16/16 бит → 0x26E (код 0x41B4)","c":"?","d":"","u":"","hi":false},{"a":22198,"f":"v0","n":14,"x":"RPMb","g":"4. VTEC и ограничитель оборотов","t":"Порог нагрузки для включения VTEC в зависимости от оборотов","c":"✔","d":"выход сравнивается с MAP; ниже ≈4810 об/мин — 255 (не включать), выше ≈5750 — 0 (любая нагрузка). Также нужны: обороты > байт 0xCC/0xCF, скорость > 0, нет ошибок","u":"","hi":false},{"a":22244,"f":"v1","n":24,"x":"ECT","g":"6. Холостой ход / IACV / обратная связь","t":"16-битная величина по ECT → 0x1B0","c":"~","d":"","u":"","hi":false},{"a":22286,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла со знаком по строке RPM (низк. кул.)","c":"~","d":"значение − 0x80 → 0x2C4, прибавляется к углу (код 0x25AB, 0x26F8); вариант 0x6960/0x6974 — при флаге 0x1B4, 0x570E/0x5722 — при 0x21D.0","u":"","hi":false},{"a":22306,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла со знаком по строке RPM (выс. кул.)","c":"~","d":"значение − 0x80 → 0x2C4, прибавляется к углу (код 0x25AB, 0x26F8); вариант 0x6960/0x6974 — при флаге 0x1B4, 0x570E/0x5722 — при 0x21D.0","u":"","hi":true},{"a":22326,"f":"v2","n":4,"x":"TPS","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Замещение MAP по TPS при отказе датчика MAP","c":"✔","d":"используется, если выставлены ошибки 0x210.2/0x210.4","u":"","hi":false},{"a":22330,"f":"raw","n":5,"x":"","g":"5. Пуск и прогрев (по ECT)","t":"Замещающее значение ECT при отказе датчика (по счётчику 0x2DF/20)","c":"✔","d":"при ошибке ECT берётся отсюда, иначе 0x62","u":"","hi":false},{"a":22335,"f":"v3","n":6,"x":"VBAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по напряжению (код 0x17FC)","c":"?","d":"","u":"","hi":false},{"a":22341,"f":"v3","n":6,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица от 0x2E3 (код 0x1806)","c":"?","d":"","u":"","hi":false},{"a":22350,"f":"raw","n":33,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица с индексом (код 0x1D32/0x1D5B)","c":"?","d":"","u":"","hi":false},{"a":22383,"f":"raw","n":6,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x4D13","c":"?","d":"","u":"","hi":false},{"a":22389,"f":"raw","n":10,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x4319","c":"?","d":"","u":"","hi":false},{"a":22399,"f":"raw","n":52,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица с индексом по АЦП-каналу 6 (код 0x1DCA)","c":"?","d":"","u":"","hi":false},{"a":22451,"f":"raw","n":4,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Пороги ECT (код 0x1385)","c":"?","d":"","u":"","hi":false},{"a":22455,"f":"raw","n":12,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Пороги для вычисления RPM-байта 0x179 (по октавам периода)","c":"✔","d":"","u":"","hi":false},{"a":22467,"f":"raw","n":16,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x035C (индекс r2)","c":"?","d":"","u":"","hi":false},{"a":22528,"f":"v2b","n":3,"x":"MAP","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по MAP (код 0x4F41)","c":"?","d":"","u":"","hi":false},{"a":22531,"f":"v0","n":10,"x":"IAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по IAT (код 0x1622)","c":"?","d":"","u":"","hi":false},{"a":22541,"f":"raw","n":10,"x":"IAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица по IAT (код 0x4F34)","c":"?","d":"","u":"","hi":false},{"a":22551,"f":"raw","n":16,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x6E76","c":"?","d":"","u":"","hi":false},{"a":22567,"f":"raw","n":16,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x6E70","c":"?","d":"","u":"","hi":false},{"a":24576,"f":"wrpm","n":40,"x":"","g":"1. Оси и основные карты","t":"Ось RPM, низкие кулачки (20 точек, период → об/мин)","c":"✔","d":"значение = период; об/мин = 1 875 000 / x (в скобках)","u":"","hi":false},{"a":24616,"f":"wrpm","n":40,"x":"","g":"1. Оси и основные карты","t":"Ось RPM, высокие кулачки (20 точек)","c":"✔","d":"","u":"","hi":true},{"a":24656,"f":"raw","n":10,"x":"","g":"1. Оси и основные карты","t":"Ось нагрузки, 10 столбцов","c":"✔","d":"вход — байт нагрузки 0xE3; растёт с MAP: столбец 0 — сильное разрежение, столбец 9 ≈ полный газ (топливо растёт, угол падает слева направо)","u":"","hi":false},{"a":24666,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Базовая длительность впрыска: наклон по нагрузке, низкие кулачки","c":"~","d":"Tb = наклон × нагрузка(0x135)/16 + 2·(смещение − 0x80), интерполяция по строке RPM, × 0x184 → 0x13E; затем импульс цилиндра = 0x13E × коэффициент 0x150 (код 0x336D). Основная карта 0x60AA/0x6172 — множитель к этой базе","u":"","hi":false},{"a":24686,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Базовая длительность впрыска: смещение (−0x80, ×2), низкие кулачки","c":"~","d":"Tb = наклон × нагрузка(0x135)/16 + 2·(смещение − 0x80), интерполяция по строке RPM, × 0x184 → 0x13E; затем импульс цилиндра = 0x13E × коэффициент 0x150 (код 0x336D). Основная карта 0x60AA/0x6172 — множитель к этой базе","u":"","hi":false},{"a":24706,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Базовая длительность впрыска: наклон по нагрузке, высокие кулачки","c":"~","d":"Tb = наклон × нагрузка(0x135)/16 + 2·(смещение − 0x80), интерполяция по строке RPM, × 0x184 → 0x13E; затем импульс цилиндра = 0x13E × коэффициент 0x150 (код 0x336D). Основная карта 0x60AA/0x6172 — множитель к этой базе","u":"","hi":true},{"a":24726,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Базовая длительность впрыска: смещение (−0x80, ×2), высокие кулачки","c":"~","d":"Tb = наклон × нагрузка(0x135)/16 + 2·(смещение − 0x80), интерполяция по строке RPM, × 0x184 → 0x13E; затем импульс цилиндра = 0x13E × коэффициент 0x150 (код 0x336D). Основная карта 0x60AA/0x6172 — множитель к этой базе","u":"","hi":true},{"a":24746,"f":"grid","n":200,"x":"","g":"1. Оси и основные карты","t":"Топливо (VE), низкие кулачки, 20×10","c":"✔","d":"результат → 0x193. линейный множитель: длительность впрыска ∝ значению (+10% к байту = +10% топлива), дальше умножается на доп. карту (0x18F), член по MAP (0x154), поправки по IAT/ECT/BARO и складывается со временем открытия форсунки 0x142. Перевод в мс требует частоты таймера и пока не выведен","u":"","hi":false},{"a":24946,"f":"grid","n":200,"x":"","g":"1. Оси и основные карты","t":"Топливо (VE), высокие кулачки, 20×10","c":"✔","d":"линейный множитель: длительность впрыска ∝ значению (+10% к байту = +10% топлива), дальше умножается на доп. карту (0x18F), член по MAP (0x154), поправки по IAT/ECT/BARO и складывается со временем открытия форсунки 0x142. Перевод в мс требует частоты таймера и пока не выведен","u":"","hi":true},{"a":25146,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Множитель топлива, доп. карта низкие кул. (строки 4–14), 11×10 — АКПП","c":"✔","d":"результат → 0x18F, умножается на основное значение топлива; 128 = ×1.00 (когда карта не применяется, код подставляет 0x80). Условие — флаги 0x211.3/0x218.4, A/B по 0x220.0 Используется при 0x220.0 = 1 (АКПП).","u":"mul128","hi":false},{"a":25256,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Множитель топлива, доп. карта низкие кул. (строки 4–14), 11×10 — МКПП","c":"✔","d":"результат → 0x18F, умножается на основное значение топлива; 128 = ×1.00 (когда карта не применяется, код подставляет 0x80). Условие — флаги 0x211.3/0x218.4, A/B по 0x220.0 Используется при 0x220.0 = 0 (МКПП).","u":"mul128","hi":false},{"a":25366,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Множитель топлива, доп. карта высокие кул. (строки 4–14), 11×10 — АКПП","c":"✔","d":"результат → 0x18F, умножается на основное значение топлива; 128 = ×1.00 (когда карта не применяется, код подставляет 0x80). Условие — флаги 0x211.3/0x218.4, A/B по 0x220.0 Используется при 0x220.0 = 1 (АКПП).","u":"mul128","hi":true},{"a":25476,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Множитель топлива, доп. карта высокие кул. (строки 4–14), 11×10 — МКПП","c":"✔","d":"результат → 0x18F, умножается на основное значение топлива; 128 = ×1.00 (когда карта не применяется, код подставляет 0x80). Условие — флаги 0x211.3/0x218.4, A/B по 0x220.0 Используется при 0x220.0 = 0 (МКПП).","u":"mul128","hi":true},{"a":25586,"f":"raw","n":6,"x":"","g":"1. Оси и основные карты","t":"Углы зажигания вне диапазона оси RPM (6 значений)","c":"~","d":"берутся вместо карты, когда обороты ниже/выше оси (флаги 0x22B); выбор по MAP ≥ 0xA0 и RPM-байту ≥ 0x80","u":"deg","hi":false},{"a":25592,"f":"grid","n":200,"x":"","g":"1. Оси и основные карты","t":"Зажигание, низкие кулачки, 20×10","c":"✔","d":"результат → 0x2AA. угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ)","u":"deg","hi":false},{"a":25792,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Зажигание, низкие кул., доп. карта (строки 4–14), 11×10 — АКПП","c":"~","d":"заменяет основную карту зажигания при флаге 0x211.3 или 0x218.4 и строке RPM 4…13; A/B выбирается битом конфигурации 0x220.0. угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ) Используется при 0x220.0 = 1 (АКПП).","u":"deg","hi":false},{"a":25902,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Зажигание, низкие кул., доп. карта (строки 4–14), 11×10 — МКПП","c":"~","d":"заменяет основную карту зажигания при флаге 0x211.3 или 0x218.4 и строке RPM 4…13; A/B выбирается битом конфигурации 0x220.0. угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ) Используется при 0x220.0 = 0 (МКПП).","u":"deg","hi":false},{"a":26012,"f":"grid","n":200,"x":"","g":"1. Оси и основные карты","t":"Зажигание, высокие кулачки, 20×10","c":"✔","d":"угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ)","u":"deg","hi":true},{"a":26212,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Зажигание, высокие кул., доп. карта (строки 4–14), 11×10 — АКПП","c":"~","d":"заменяет основную карту зажигания при флаге 0x211.3 или 0x218.4 и строке RPM 4…13; A/B выбирается битом конфигурации 0x220.0. угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ) Используется при 0x220.0 = 1 (АКПП).","u":"deg","hi":true},{"a":26322,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Зажигание, высокие кул., доп. карта (строки 4–14), 11×10 — МКПП","c":"~","d":"заменяет основную карту зажигания при флаге 0x211.3 или 0x218.4 и строке RPM 4…13; A/B выбирается битом конфигурации 0x220.0. угол ≈ x·60/256° (0.234°/ед.): код раскладывает значение на зубья коленвала по 30° и 1/256 зуба. Масштаб из кода, ноль шкалы (x=0 → ВМТ) подтверждён стробоскопом: 15° на ХХ. Столбцы — нагрузка 0xE3, растёт с MAP (столбец 9 ≈ полный газ) Используется при 0x220.0 = 0 (МКПП).","u":"deg","hi":true},{"a":26432,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Третий набор, низкие кул., 11×10 — АКПП","c":"?","d":"код 0x3522; включается флагами 0x12F.4/.5 и условием по ECT 0xD9 Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":26542,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Третий набор, низкие кул., 11×10 — МКПП","c":"?","d":"Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":26652,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Третий набор, высокие кул., 11×10 — АКПП","c":"?","d":"Используется при 0x220.0 = 1 (АКПП).","u":"","hi":true},{"a":26762,"f":"grid11","n":110,"x":"","g":"1. Оси и основные карты","t":"Третий набор, высокие кул., 11×10 — МКПП","c":"?","d":"Используется при 0x220.0 = 0 (МКПП).","u":"","hi":true},{"a":26882,"f":"v1","n":15,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица (код 0x3D5E)","c":"?","d":"","u":"","hi":false},{"a":26897,"f":"v0","n":16,"x":"RPMb","g":"2. Топливо: коррекции","t":"Порог TPS по оборотам (граница режима по дросселю)","c":"?","d":"сравнивается с TPS 0xAB (код 0x2C44); стоково 64 при 500–1000, 152 при ≥6000 об/мин","u":"","hi":false},{"a":26913,"f":"raw","n":2,"x":"","g":"2. Топливо: коррекции","t":"Предел основного значения топлива","c":"~","d":"значение после построчных множителей не превышает этого байта (код 0x2DA3)","u":"","hi":false},{"a":26915,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Множитель топлива по строке RPM, высокие кул.","c":"~","d":"умножает основное значение топлива 0x193 (×/256) при флагах 0x11C.4/.5","u":"mul256","hi":true},{"a":26935,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Множитель топлива по строке RPM, низкие кул.","c":"~","d":"умножает основное значение топлива 0x193 (×/256) при флагах 0x11C.4/.5","u":"mul256","hi":false},{"a":26955,"f":"v1","n":21,"x":"RPMb","g":"2. Топливо: коррекции","t":"Таблица по оборотам (код 0x3252), 16 бит","c":"?","d":"","u":"","hi":false},{"a":26976,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла со знаком по строке RPM (низк. кул.)","c":"~","d":"значение − 0x80 → 0x2C4, прибавляется к углу (код 0x25AB, 0x26F8); вариант 0x6960/0x6974 — при флаге 0x1B4, 0x570E/0x5722 — при 0x21D.0","u":"","hi":false},{"a":26996,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла со знаком по строке RPM (выс. кул.)","c":"~","d":"значение − 0x80 → 0x2C4, прибавляется к углу (код 0x25AB, 0x26F8); вариант 0x6960/0x6974 — при флаге 0x1B4, 0x570E/0x5722 — при 0x21D.0","u":"","hi":true},{"a":27016,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (низк. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":false},{"a":27036,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Минимальный угол по строке RPM (выс. кул.)","c":"~","d":"0x2B6: итоговое значение угла не опускается ниже этой величины (код 0x277D); вариант выбирается флагами 0x231.2/0x21D.0","u":"deg","hi":true},{"a":27056,"f":"raw","n":22,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица от 0xDE (PWMR0H) (код 0x28B0)","c":"?","d":"","u":"","hi":false},{"a":27078,"f":"raw","n":32,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Таблица кода 0x292F","c":"?","d":"","u":"","hi":false},{"a":27110,"f":"v0","n":14,"x":"ECT","g":"5. Пуск и прогрев (по ECT)","t":"Коэффициент по ECT → 0x194","c":"~","d":"","u":"","hi":false},{"a":27124,"f":"v0","n":14,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица от 0x295 (код 0x3F80)","c":"?","d":"","u":"","hi":false},{"a":27138,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла по строке RPM, высокие кул. (вычитается)","c":"~","d":"0x2B4 со знаком минус добавляется к углу","u":"deg","hi":true},{"a":27158,"f":"row","n":20,"x":"ROW","g":"3. Зажигание: коррекции","t":"Поправка угла по строке RPM, низкие кул. (вычитается)","c":"~","d":"0x2B4 со знаком минус добавляется к углу","u":"deg","hi":false},{"a":27178,"f":"w16","n":16,"x":"","g":"5. Пуск и прогрев (по ECT)","t":"Пусковой импульс: коэффициент по периоду оборотов","c":"~","d":"0x180 в режиме пуска; вход — период 180° (r_period)","u":"","hi":false},{"a":27194,"f":"v0","n":12,"x":"RPMb","g":"6. Холостой ход / IACV / обратная связь","t":"Таблица по оборотам (код 0x34A6)","c":"?","d":"","u":"","hi":false},{"a":27206,"f":"raw","n":5,"x":"","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Коэффициент по ступени резистора (АЦП 0x3D6) → 0x195","c":"?","d":"код 0x1A12","u":"","hi":false},{"a":27211,"f":"v2","n":4,"x":"IAT","g":"7. Датчики, барокоррекция, служебные таблицы","t":"Коэффициент по IAT → 0x2CB","c":"?","d":"","u":"","hi":false},{"a":27215,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Минимальная нагрузка для базовой длительности, низкие кулачки","c":"~","d":"0x135 = max(нагрузка 0xE3, это значение по строке RPM); входит в формулу базовой длительности","u":"","hi":false},{"a":27235,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Минимальная нагрузка для базовой длительности, высокие кулачки","c":"~","d":"то же для высоких кулачков (код 0x6E00)","u":"","hi":true},{"a":27255,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Множитель топлива по строке RPM (код 0x2D8C)","c":"?","d":"умножает значение топлива r4 (×/128)","u":"","hi":false},{"a":27275,"f":"row","n":20,"x":"ROW","g":"2. Топливо: коррекции","t":"Множитель топлива по строке RPM, выс. (код 0x2D81)","c":"?","d":"умножает значение топлива r4 (×/128)","u":"","hi":true},{"a":27295,"f":"raw","n":24,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Добавка к управлению EACV по ступени резистора (АЦП 0x3DD) — АКПП","c":"~","d":"слова → 0x166/0x164, прибавляются к току клапана ХХ (код 0x4775); пары выбираются битом МКПП/АКПП 0x220.0 и флагом 0x21F.3 Используется при 0x220.0 = 1 (АКПП).","u":"","hi":false},{"a":27319,"f":"raw","n":24,"x":"","g":"6. Холостой ход / IACV / обратная связь","t":"Добавка к управлению EACV по ступени резистора (АЦП 0x3DD) — МКПП","c":"~","d":"слова → 0x166/0x164, прибавляются к току клапана ХХ (код 0x4775); пары выбираются битом МКПП/АКПП 0x220.0 и флагом 0x21F.3 Используется при 0x220.0 = 0 (МКПП).","u":"","hi":false},{"a":27343,"f":"raw","n":256,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Таблица слов с индексом (код 0x4BFD)","c":"?","d":"","u":"","hi":false},{"a":27599,"f":"raw","n":128,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Таблица байт с индексом (код 0x4C03)","c":"?","d":"","u":"","hi":false},{"a":27727,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 1 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27743,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 2 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27759,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 3 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27775,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 4 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27791,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 5 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27807,"f":"raw","n":16,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Блок 6 из 6 (код 0x397C–0x39AE)","c":"?","d":"","u":"","hi":false},{"a":27823,"f":"w","n":80,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Таблица переходов обработчиков ошибок (адреса кода)","c":"✔","d":"не калибровка — адреса подпрограмм","u":"","hi":false},{"a":27903,"f":"raw","n":87,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Варианты конфигурации ECU (по 4 байта)","c":"✔","d":"выбираются по напряжениям кодирующих входов (0x3D9/0x3D5); из них берётся байт 0x220 (бит 0 — выбор пар таблиц A/B)","u":"","hi":false},{"a":27990,"f":"raw","n":26,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Таблица «код входа → номер варианта» (0xFF = недопустимо → останов с кодом 0x56)","c":"✔","d":"","u":"","hi":false},{"a":32752,"f":"raw","n":4,"x":"","g":"8. Конфигурация ECU и служебные данные","t":"Флаги в конце ROM: 0x7FF1=0 отключает проверку контрольной суммы, 0x7FF2/0x7FF3 — опции","c":"✔","d":"","u":"","hi":false}].filter(t => t.c !== "?");
+const ROMSIZE = 0x8000, CKSUM_FIX = 0x3A, CKSUM_FLAG = 0x7FF1;
+const SIG = [[0x0000,[0x83,0x07]],[0x22FF,[0x62,0xF8,0x63]],[0x2322,[0x62,0x9C,0x65]],[0x2CFF,[0x62,0xAA,0x60]],[0x222D,[0x62,0x00,0x60]]];
+const XIN = {RPMb:"RPM-байт 0x179",ECT:"ECT 0xD9 (ОЖ, сырые ед.)",IAT:"IAT 0xD8 (воздух, сырые ед.)",BARO:"BARO 0xE0",MAP:"MAP 0xE1",VSS:"скорость 0xDF, км/ч",VBAT:"напряжение 0xDB",TPS:"TPS 0xE7/0xE9",ROW:"строка оси RPM"};
+const CONF = {"✔":"подтверждено кодом","~":"вероятно","?":"назначение не установлено"};
+const FMT = {grid:"карта 20×10",grid11:"карта 11×10 (строки 4–14)",v0:"точки x→y (байт/байт)",v2:"2 точки x→y, с ограничением",v2b:"2 точки x→y, с ограничением",v1:"точки x→y (байт/слово)",v3:"2 точки x→y16, с ограничением",w16:"точки x16→y16",wrpm:"ось RPM (период)",w:"слова",row:"20 значений по строкам RPM",raw:"байты"};
+CATALOG.forEach(t => { t.id = t.a.toString(16).toUpperCase().padStart(4,"0"); });
+/* Sensor scales (estimates): ECT/IAT thermistor curve from the service manual (beta model, R25 ≈ 2.04 kΩ, B ≈ 3546)
+   with an ECU pull-up of ≈1.65 kΩ fitted to three code/manual points (40 ≈ 80 °C, 46 ≈ 75 °C purge, 68 ≈ 60 °C VTEC);
+   MAP/BARO byte from the manual's sensor line (0.55 V vacuum … 2.95 V atmosphere) and the code's (raw−24)·2 scaling. */
+const ECT_NOTE = "оценка: термистор по мануалу + подтяжка в ЭБУ ≈1.65 кОм (подобрана по трём точкам из кода и мануала), точность ±5–10 °C";
+function ectC(raw){ raw=Math.max(1,Math.min(254,raw)); const R=1.65*raw/(255-raw); return 1/(1/298.15+Math.log(R/2.04)/3546)-273.15; }
+function ectRaw(c){ const R=2.04*Math.exp(3546*(1/(c+273.15)-1/298.15)); return Math.max(0,Math.min(255,Math.round(255*R/(R+1.65)))); }
+function mapKpa(b){ const V=(b/2+24)*5/255; return (V-0.55)*101.3/2.4; }
+const UNITS = {
+  deg:    { k:60/256, d:1, s:"°", name:"градусы",   note:"угол до ВМТ = x·60/256° (0.234°/ед.); ноль шкалы подтверждён стробоскопом (15° на ХХ)" },
+  ms4:    { k:0.004,  d:3, s:"мс", name:"мс", note:"мс = значение × 0.004 (шаг таймера форсунок 4 мкс при кварце 16 МГц — оценка)" },
+  mul128: { k:1/128,  d:2, s:"×", name:"множитель", note:"множитель = x/128 (128 = ×1.00)" },
+  mul256: { k:1/256,  d:2, s:"×", name:"множитель", note:"множитель = x/256 (255 ≈ ×1.00)" },
+  kmh:    { k:1, d:0, s:"км/ч", name:"км/ч", note:"значение = скорость в км/ч" },
+  ect:    { fn:ectC, inv:ectRaw, d:0, s:"°C", name:"°C (оценка)", note:ECT_NOTE },
+  rpmb:   { fn:rpmB, inv:rpmToB, d:0, s:"об/мин", name:"об/мин", note:"значение — RPM-байт: 0=500, 64=1000, 128=2000, 192=4000 об/мин, линейно внутри октавы" },
+};
+function dispNum(t,raw){ const u=unitOf(t); return u ? (u.fn ? u.fn(raw) : raw*u.k) : raw; }
+const unitOf = t => (t && t.u && S.units) ? UNITS[t.u] : null;
+function disp(t,raw){ const u=unitOf(t); return u ? dispNum(t,raw).toFixed(u.d) : ""+raw; }
+function toRaw(t,val){ const u=unitOf(t); return u ? (u.inv ? u.inv(val) : Math.round(val/u.k)) : Math.round(val); }
+function opDelta(t,val){ const u=unitOf(t); return u ? val/u.k : val; }
+const G_CONST = "0. Константы";
+CATALOG.forEach(t => { t.lg = (t.f==="w"||t.f==="raw") && t.n<=4 ? G_CONST : t.g; });
+CATALOG.sort((x,y) => x.lg.localeCompare(y.lg, "ru", {numeric:true}) || x.a - y.a);
+const COLLAPSE_KEY = "p13-editor-collapsed";
+function loadCollapsed(){ try{ return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY)||"[]")); }catch(e){ return new Set(); } }
+function saveCollapsed(){ try{ localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...S.collapsed])); }catch(e){} }
+
+const S = { units:true, orig:null, cur:null, ref:null, name:"", sel:null, undo:[], redo:[], fixCk:true, filters:new Set(), q:"", collapsed:loadCollapsed() };
+const $ = s => document.querySelector(s);
+const hex = (v,w=4) => v.toString(16).toUpperCase().padStart(w,"0");
+function rpmB(b){ return Math.round(500 * 2 ** Math.floor(b/64) * (1 + (b%64)/64)); }
+function rpmToB(rpm){ rpm=Math.max(500,Math.min(7999,rpm)); const o=Math.floor(Math.log2(rpm/500)); return Math.max(0,Math.min(255,Math.round(64*o+64*(rpm/(500*2**o)-1)))); }
+const per2rpm = p => p ? Math.round(1875000/p) : 0;
+
+function rd(buf,a,w){ return w===2 ? buf[a] | (buf[a+1]<<8) : buf[a]; }
+function wr(buf,a,w,v){ if(w===2){ buf[a]=v&255; buf[a+1]=(v>>8)&255; } else buf[a]=v&255; }
+function sum(buf){ let s=0; for(let i=0;i<buf.length;i++) s=(s+buf[i])&255; return s; }
+
+/* ---------- table layouts: list of editable fields per table ---------- */
+function layout(t){
+  const n=t.n, a=t.a;
+  const pts=(stride,xw,yw,count)=>{ const r=[]; for(let i=0;i<count;i++){ const o=a+i*stride; r.push({x:{a:o,w:xw}, y:{a:o+xw,w:yw}}); } return r; };
+  switch(t.f){
+    case "v0": return {kind:"pts", pts:pts(2,1,1,Math.floor(n/2))};
+    case "v2": case "v2b": return {kind:"pts", pts:pts(2,1,1,2)};
+    case "v1": return {kind:"pts", pts:pts(3,1,2,Math.floor(n/3))};
+    case "v3": return {kind:"pts", pts:pts(3,1,2,2)};
+    case "w16": return {kind:"pts", pts:pts(4,2,2,Math.floor(n/4))};
+    case "grid": return {kind:"grid", rows:20, cols:10};
+    case "grid11": return {kind:"grid", rows:11, cols:10, rowOff:4};
+    case "wrpm": return {kind:"words", count:n/2, rpm:true};
+    case "w": return {kind:"words", count:Math.floor(n/2), rpm:/Ограничитель/.test(t.t)};
+    case "row": return {kind:"row", count:n};
+    default: return t.u ? {kind:"row", count:t.n, noAxis:true} : {kind:"raw"};
+  }
+}
+function tableBytes(t){ return [t.a, t.a + t.n]; }
+function diffCount(a,b,t){ if(!a||!b) return 0; let c=0; for(let i=t.a;i<t.a+t.n && i<ROMSIZE;i++) if(a[i]!==b[i]) c++; return c; }
+function rpmAxis(buf,hi){ const base=hi?0x6028:0x6000; const r=[]; for(let i=0;i<20;i++) r.push(per2rpm(rd(buf,base+2*i,2))); return r; }
+
+/* ---------- edits with undo ---------- */
+function applyEdits(list,label){
+  // list: [{a,w,v}] ; records byte-level old/new
+  const rec=[];
+  for(const e of list){
+    const max = e.w===2 ? 0xFFFF : 0xFF;
+    const v = Math.max(0, Math.min(max, Math.round(e.v)));
+    for(let k=0;k<e.w;k++){
+      const ad=e.a+k, nv = e.w===2 ? (k? (v>>8)&255 : v&255) : v;
+      if(S.cur[ad]!==nv){ rec.push([ad,S.cur[ad],nv]); S.cur[ad]=nv; }
+    }
+  }
+  if(!rec.length) return false;
+  S.undo.push({label,rec}); S.redo.length=0; refresh(); return true;
+}
+function undo(){ const u=S.undo.pop(); if(!u) return; for(let i=u.rec.length-1;i>=0;i--){ const [a,o]=u.rec[i]; S.cur[a]=o; } S.redo.push(u); toast("Отменено: "+u.label); refresh(); }
+function redo(){ const u=S.redo.pop(); if(!u) return; for(const [a,,n] of u.rec) S.cur[a]=n; S.undo.push(u); toast("Повторено: "+u.label); refresh(); }
+
+/* ---------- file loading ---------- */
+function readFile(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(new Uint8Array(r.result)); r.onerror=()=>rej(r.error); r.readAsArrayBuffer(file); }); }
+function checkRom(buf){
+  if(buf.length!==ROMSIZE) return `Размер файла ${buf.length} байт, а прошивка P13 — ровно 32768 байт (32 КБ).`;
+  for(const [a,b] of SIG) for(let i=0;i<b.length;i++) if(buf[a+i]!==b[i])
+    return `По адресу 0x${hex(a+i)} ожидался байт ${hex(b[i],2)}, а в файле ${hex(buf[a+i],2)}. Это не прошивка P13 этой версии кода — адреса карт к ней не подходят.`;
+  return null;
+}
+async function loadMain(file){
+  let buf; try{ buf=await readFile(file); }catch(e){ return showError("Не удалось прочитать файл: "+e.message); }
+  const err=checkRom(buf);
+  if(err) return showError(err);
+  S.orig=buf; S.cur=new Uint8Array(buf); S.name=file.name; S.undo=[]; S.redo=[];
+  if(!S.sel) S.sel="63F8";
+  refresh(); toast(`Загружено: ${file.name}`);
+}
+async function loadRef(file){
+  let buf; try{ buf=await readFile(file); }catch(e){ return toast("Не удалось прочитать эталон"); }
+  const err=checkRom(buf);
+  if(err) return toast("Эталон не подходит: "+err);
+  S.ref=buf; S.refName=file.name; refresh(); toast(`Эталон: ${file.name}`);
+}
+function showError(m){ const p=$("#pane"); p.innerHTML=""; p.append(emptyState()); const d=document.createElement("div"); d.className="msg err"; d.textContent=m; p.prepend(d); }
+
+/* ---------- header / status ---------- */
+function renderHeader(){
+  $("#fname").textContent = S.cur ? S.name : "Файл не загружен";
+  const P=$("#pills"); P.innerHTML="";
+  const pill=(txt,cls,title)=>{ const s=document.createElement("span"); s.className="pill "+(cls||""); s.textContent=txt; if(title) s.title=title; P.append(s); };
+  if(S.cur){
+    const ck=sum(S.cur), flag=S.cur[CKSUM_FLAG];
+    if(ck===0) pill("сумма OK","ok","Сумма всех байт по модулю 256 равна 0");
+    else pill(`сумма ${hex(ck,2)}`, S.fixCk?"chg":"bad", S.fixCk?"Будет исправлена при скачивании через байт 0x3A":"ECU с включённой проверкой не запустится (код 4B)");
+    pill(flag===0?"проверка суммы ECU выкл.":"проверка суммы ECU вкл.","", "Байт 0x7FF1: 00 — ECU не проверяет контрольную сумму");
+    let changed=0; for(let i=0;i<ROMSIZE;i++) if(S.cur[i]!==S.orig[i]) changed++;
+    if(changed) pill(`изменено байт: ${changed}`,"chg");
+    if(S.ref) pill(`эталон: ${S.refName}`,"","Отличия от эталона отмечены фиолетовым");
+  }
+  $("#saveBtn").disabled=!S.cur; $("#undoBtn").disabled=!S.undo.length; $("#redoBtn").disabled=!S.redo.length;
+  $("#refLbl").style.opacity = S.cur ? "" : ".5";
+}
+
+/* ---------- index ---------- */
+function renderList(){
+  const L=$("#list"); L.innerHTML="";
+  const q=S.q.trim().toLowerCase().replace(/^0x/,"");
+  const groups=new Map();
+  for(const t of CATALOG){
+    if(S.filters.has("main") && !t.g.startsWith("1.") && t.lg!==G_CONST) continue;
+    const chg = S.cur ? diffCount(S.cur,S.orig,t) : 0;
+    const rdf = S.cur && S.ref ? diffCount(S.cur,S.ref,t) : 0;
+    if(S.filters.has("chg") && !chg) continue;
+    if(S.filters.has("ref") && !rdf) continue;
+    if(q && !(t.id.toLowerCase().includes(q) || t.t.toLowerCase().includes(q) || (t.d||"").toLowerCase().includes(q))) continue;
+    if(!groups.has(t.lg)) groups.set(t.lg,[]);
+    groups.get(t.lg).push({t,chg,rdf});
+  }
+  for(const [g,items] of groups){
+    // while searching, show matches even inside collapsed groups
+    const open = q ? true : !S.collapsed.has(g);
+    const h=document.createElement("button"); h.className="grp"+(g===G_CONST?" const":""); h.setAttribute("aria-expanded",open);
+    const nChg=items.filter(x=>x.chg).length, nRef=items.filter(x=>x.rdf).length;
+    h.innerHTML=`<span class="chev" aria-hidden="true">▾</span><span class="gt"></span><span class="cnt"></span>`;
+    h.querySelector(".gt").textContent=g.replace(/^\d+\.\s*/,"");
+    const cnt=h.querySelector(".cnt");
+    if(nChg){ const d=document.createElement("span"); d.className="dot chg"; d.title=`изменено таблиц: ${nChg}`; cnt.append(d); }
+    if(nRef){ const d=document.createElement("span"); d.className="dot ref"; d.title=`отличаются от эталона: ${nRef}`; cnt.append(d); }
+    cnt.append(document.createTextNode(items.length));
+    h.onclick=()=>{ if(S.collapsed.has(g)) S.collapsed.delete(g); else S.collapsed.add(g); saveCollapsed(); renderList(); };
+    L.append(h);
+    if(!open) continue;
+    for(const {t,chg,rdf} of items){
+      const it=document.createElement("div"); it.className="item"; it.tabIndex=0; it.setAttribute("role","button");
+      if(S.sel===t.id) it.setAttribute("aria-current","true");
+      it.innerHTML=`<span class="ad"></span><span class="nm"></span><span class="mk"></span>`;
+      it.children[0].textContent=t.id; it.children[1].textContent=t.t; it.title=t.t;
+      const mk=it.children[2];
+      if(chg){ const d=document.createElement("span"); d.className="dot chg"; d.title=`изменено байт: ${chg}`; mk.append(d); }
+      if(rdf){ const d=document.createElement("span"); d.className="dot ref"; d.title=`отличий от эталона: ${rdf}`; mk.append(d); }
+      const c=document.createElement("span"); c.className="conf"; c.textContent=t.c; c.title=CONF[t.c]; mk.append(c);
+      const go=()=>{ S.sel=t.id; S.cell=null; refresh(); if(matchMedia("(max-width:820px)").matches) $("#pane").scrollIntoView({block:"start"}); };
+      it.onclick=go; it.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } };
+      L.append(it);
+    }
+  }
+  if(!L.children.length){ const d=document.createElement("div"); d.className="grp"; d.textContent="Ничего не найдено"; L.append(d); }
+}
+
+/* ---------- empty state ---------- */
+function emptyState(){
+  const d=document.createElement("div"); d.className="drop"; d.id="drop";
+  d.innerHTML=`<h1>Откройте прошивку P13</h1>
+  <p>Редактор работает с 32-килобайтным образом ROM Honda P13 (OKI M66911). Файл никуда не отправляется: он читается и изменяется прямо в браузере.</p>
+  <ul><li>${CATALOG.length} таблиц с установленным назначением: основные карты топлива и зажигания, оси RPM и нагрузки, VTEC, ограничитель оборотов, коррекции</li>
+  <li>отмена и повтор, сравнение с эталонной прошивкой, вставка из Excel</li>
+  <li>при скачивании контрольная сумма исправляется автоматически</li></ul>
+  <label class="btn primary" for="fileIn2">Выбрать файл .bin<input type="file" id="fileIn2" accept=".bin,.BIN,application/octet-stream"></label>
+  <p class="axisnote">…или перетащите файл сюда. Слева уже можно просматривать список таблиц.</p>
+  <p class="axisnote">Описание карт, формулы и исходники: <a href="https://github.com/icelord75/p13-map-editor">github.com/icelord75/p13-map-editor</a></p>`;
+  d.querySelector("#fileIn2").onchange=e=>{ if(e.target.files[0]) loadMain(e.target.files[0]); };
+  return d;
+}
+
+/* ---------- heat color ---------- */
+function heat(v,lo,hi){
+  const f = hi>lo ? (v-lo)/(hi-lo) : .5;
+  const h = 225 - 225*f; // blue → red
+  const cs=getComputedStyle(document.documentElement);
+  return `hsl(${h.toFixed(0)} ${cs.getPropertyValue("--heat-s").trim()} ${cs.getPropertyValue("--heat-l").trim()})`;
+}
+
+/* ---------- pane ---------- */
+function renderPane(){
+  const p=$("#pane"); p.innerHTML="";
+  const t=CATALOG.find(x=>x.id===S.sel);
+  if(!S.cur){
+    p.append(emptyState());
+    if(t) p.append(infoBlock(t,true));
+    return;
+  }
+  if(!t) return;
+  p.append(infoBlock(t,false));
+  const L=layout(t);
+  if(L.kind==="grid") p.append(gridEditor(t,L));
+  else if(L.kind==="pts") p.append(ptsEditor(t,L));
+  else if(L.kind==="words") p.append(wordsEditor(t,L));
+  else if(L.kind==="row") p.append(rowEditor(t,L));
+  else p.append(hexEditor(t.a, Math.max(t.n,16), t));
+  p.append(sidePanels(t));
+}
+function infoBlock(t,preview){
+  const d=document.createElement("div"); d.className="titlebar";
+  const h=document.createElement("h1"); h.textContent=t.t; d.append(h);
+  const m=document.createElement("div"); m.className="meta mono";
+  const add=s=>{ const e=document.createElement("span"); e.textContent=s; m.append(e); };
+  add("0x"+t.id+"–0x"+hex(t.a+t.n-1)); add(FMT[t.f]||t.f); add(t.n+" байт"); if(t.x) add("вход: "+(XIN[t.x]||t.x)); add(t.c+" "+CONF[t.c]);
+  d.append(m);
+  if(t.d){ const n=document.createElement("div"); n.className="note"; n.textContent=t.d; d.append(n); }
+  if(preview){ const n=document.createElement("div"); n.className="note"; n.textContent="Загрузите прошивку, чтобы увидеть и изменить значения."; d.append(n); }
+  return d;
+}
+
+/* toolbar shared by grid / row / pts */
+function toolbar(onOp, extra, t){
+  const d=document.createElement("div"); d.className="tools";
+  d.innerHTML=`<input type="number" id="opVal" value="1" step="any" aria-label="Значение">
+  <button class="btn small" data-op="set">= Задать</button><button class="btn small" data-op="add">+ Прибавить</button><button class="btn small" data-op="sub">− Вычесть</button><button class="btn small" data-op="pct">× %</button>
+  <span class="sep"></span><button class="btn small" data-op="smooth">Сгладить</button><button class="btn small" data-op="interp">Интерполировать</button>
+  <span class="sep"></span><button class="btn small" data-op="orig">Вернуть исходное</button><button class="btn small" data-op="ref" ${S.ref?"":"disabled"}>Взять из эталона</button>`;
+  d.querySelectorAll("[data-op]").forEach(b=>b.onclick=()=>onOp(b.dataset.op, parseFloat(d.querySelector("#opVal").value)));
+  if(t && t.u){ const sep=document.createElement("span"); sep.className="sep"; const b=document.createElement("button"); b.className="btn small"; b.id="unitBtn";
+    b.textContent = S.units ? `Показано: ${UNITS[t.u].name} · переключить на сырые` : `Показано: сырые · переключить на ${UNITS[t.u].name}`;
+    b.title=UNITS[t.u].note; b.onclick=()=>{ S.units=!S.units; refresh(); }; d.append(sep,b); }
+  if(extra){ const s=document.createElement("span"); s.className="hint"; s.textContent=extra + (unitOf(t)?` Значения и ввод — в единицах «${unitOf(t).name}»: ${unitOf(t).note}.`:""); d.append(s); }
+  return d;
+}
+function opValue(op,old,val,origv,refv,t){
+  switch(op){
+    case "set": return t?toRaw(t,val):val;
+    case "add": return t&&unitOf(t) ? toRaw(t,dispNum(t,old)+val) : old+val;
+    case "sub": return t&&unitOf(t) ? toRaw(t,dispNum(t,old)-val) : old-val;
+    case "pct": return old*(1+val/100); case "orig": return origv; case "ref": return refv;
+  }
+  return old;
+}
+
+/* ---------- 2D map ---------- */
+function gridEditor(t,L){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="10px";
+  const R=L.rows, C=L.cols, off=L.rowOff||0;
+  const axis=rpmAxis(S.cur,t.hi).slice(off,off+R);
+  const loadAx=[...S.cur.slice(0x6050,0x605A)];
+  const at=(r,c)=>t.a+r*C+c;
+  if(!S.cell || S.cell.t!==t.id) S.cell={t:t.id,r:0,c:0,r2:0,c2:0};
+  const sel=()=>{ const s=S.cell; return [Math.min(s.r,s.r2),Math.max(s.r,s.r2),Math.min(s.c,s.c2),Math.max(s.c,s.c2)]; };
+  const cellsSel=()=>{ const [r0,r1,c0,c1]=sel(); const a=[]; for(let r=r0;r<=r1;r++) for(let c=c0;c<=c1;c++) a.push([r,c]); return a; };
+  const doOp=(op,val)=>{
+    const list=[];
+    if(op==="smooth"){
+      for(const [r,c] of cellsSel()){ let s=0,n=0; for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){ const rr=r+dr,cc=c+dc; if(rr>=0&&rr<R&&cc>=0&&cc<C){ s+=S.cur[at(rr,cc)]*(dr||dc?1:4); n+=dr||dc?1:4; } } list.push({a:at(r,c),w:1,v:s/n}); }
+    } else if(op==="interp"){
+      const [r0,r1,c0,c1]=sel();
+      for(let r=r0;r<=r1;r++) for(let c=c0;c<=c1;c++){
+        const fr=r1>r0?(r-r0)/(r1-r0):0, fc=c1>c0?(c-c0)/(c1-c0):0;
+        const q=(rr,cc)=>S.cur[at(rr,cc)];
+        const v = r1>r0 && c1>c0 ? (q(r0,c0)*(1-fr)*(1-fc)+q(r0,c1)*(1-fr)*fc+q(r1,c0)*fr*(1-fc)+q(r1,c1)*fr*fc)
+                : r1>r0 ? q(r0,c)*(1-fr)+q(r1,c)*fr : q(r,c0)*(1-fc)+q(r,c1)*fc;
+        list.push({a:at(r,c),w:1,v});
+      }
+    } else for(const [r,c] of cellsSel()){ const a=at(r,c); list.push({a,w:1,v:opValue(op,S.cur[a],val,S.orig[a],S.ref?S.ref[a]:S.cur[a],t)}); }
+    applyEdits(list, `${t.id}: ${op}`);
+  };
+  wrap.append(toolbar(doOp,"Выделение: клик, Shift+клик или протяжка. Ввод числа — сразу в ячейку, Enter — записать. +/− меняют на 1 сырую единицу, Ctrl+C / Ctrl+V — копирование в Excel и обратно.",t));
+  let vals=[]; for(let r=0;r<R;r++) for(let c=0;c<C;c++) vals.push(S.cur[at(r,c)]);
+  const lo=Math.min(...vals), hi=Math.max(...vals);
+  const sc=document.createElement("div"); sc.className="scroll";
+  const tb=document.createElement("table"); tb.className="grid"; tb.tabIndex=0; tb.id="gridTable";
+  let h=`<thead><tr><th>об/мин \\ нагрузка</th>${loadAx.map(v=>`<th title="0x6050: сырое ${v}">${Math.round(v*100/255)}%</th>`).join("")}</tr></thead><tbody>`;
+  const [r0,r1,c0,c1]=sel();
+  for(let r=0;r<R;r++){
+    h+=`<tr><th>${axis[r]??""}</th>`;
+    for(let c=0;c<C;c++){
+      const a=at(r,c), v=S.cur[a];
+      const cls=[]; if(v!==S.orig[a]) cls.push("chg"); if(S.ref && v!==S.ref[a]) cls.push("rdf");
+      if(r>=r0&&r<=r1&&c>=c0&&c<=c1) cls.push("sel"); if(r===S.cell.r2&&c===S.cell.c2) cls.push("cur");
+      const tip=`0x${hex(a)} · сырое ${v} · было ${disp(t,S.orig[a])}`+(S.ref?` · эталон ${disp(t,S.ref[a])}`:"");
+      h+=`<td class="${cls.join(" ")}" data-r="${r}" data-c="${c}" style="background:${heat(v,lo,hi)}" title="${tip}">${disp(t,v)}</td>`;
+    }
+    h+="</tr>";
+  }
+  tb.innerHTML=h+"</tbody>";
+  let drag=false;
+  tb.addEventListener("mousedown",e=>{ const td=e.target.closest("td"); if(!td||td.querySelector("input")) return; const r=+td.dataset.r,c=+td.dataset.c;
+    if(e.shiftKey){ S.cell.r2=r; S.cell.c2=c; } else S.cell={t:t.id,r,c,r2:r,c2:c}; drag=true; markSel(tb,sel()); tb.focus(); e.preventDefault(); });
+  tb.addEventListener("mouseover",e=>{ if(!drag) return; const td=e.target.closest("td"); if(!td) return; S.cell.r2=+td.dataset.r; S.cell.c2=+td.dataset.c; markSel(tb,sel()); });
+  window.addEventListener("mouseup",()=>{ drag=false; },{once:true});
+  tb.addEventListener("dblclick",e=>{ const td=e.target.closest("td"); if(td) startEdit(td,disp(t,S.cur[at(+td.dataset.r,+td.dataset.c)])); });
+  const startEdit=(td,init)=>{
+    const r=+td.dataset.r,c=+td.dataset.c, a=at(r,c);
+    const inp=document.createElement("input"); inp.type="text"; inp.inputMode="numeric"; inp.value=init; inp.setAttribute("aria-label","Значение ячейки");
+    td.textContent=""; td.append(inp); inp.focus(); inp.select();
+    let done=false;
+    const commit=(ok,move)=>{ if(done) return; done=true; const v=parseFloat(inp.value.replace(",","."));
+      if(ok && !isNaN(v)) applyEdits([{a,w:1,v:toRaw(t,v)}], `${t.id}: ячейка`);
+      if(move){ S.cell={t:t.id,r:Math.min(R-1,r+move),c,r2:Math.min(R-1,r+move),c2:c}; }
+      refresh(); requestAnimationFrame(()=>{ const g=$("#gridTable"); if(g) g.focus(); }); };
+    inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); commit(true,1);} else if(e.key==="Escape"){ e.preventDefault(); commit(false);} else if(e.key==="Tab"){ e.preventDefault(); commit(true,0);} e.stopPropagation(); };
+    inp.onblur=()=>commit(true);
+  };
+  tb.addEventListener("keydown",e=>{
+    const s=S.cell; const mv={ArrowUp:[-1,0],ArrowDown:[1,0],ArrowLeft:[0,-1],ArrowRight:[0,1]}[e.key];
+    if(mv){ e.preventDefault(); const nr=Math.max(0,Math.min(R-1,s.r2+mv[0])), nc=Math.max(0,Math.min(C-1,s.c2+mv[1]));
+      if(e.shiftKey){ s.r2=nr; s.c2=nc; } else S.cell={t:t.id,r:nr,c:nc,r2:nr,c2:nc}; markSel(tb,sel()); return; }
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c"){ e.preventDefault(); const [a0,a1,b0,b1]=sel(); const rows=[]; for(let r=a0;r<=a1;r++){ const row=[]; for(let c=b0;c<=b1;c++) row.push(disp(t,S.cur[at(r,c)])); rows.push(row.join("\t")); }
+      const txt=rows.join("\n"); if(navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast("Скопировано в буфер обмена"),()=>toast("Браузер не дал доступ к буферу обмена")); return; }
+    if(e.key==="+"||e.key==="="){ e.preventDefault(); doOp("add", e.shiftKey&&e.key==="="?1:1); return; }
+    if(e.key==="-"||e.key==="_"){ e.preventDefault(); doOp("sub",1); return; }
+    if(e.key==="Enter"||e.key==="F2"){ e.preventDefault(); const td=tb.querySelector(`td[data-r="${s.r2}"][data-c="${s.c2}"]`); if(td) startEdit(td,disp(t,S.cur[at(s.r2,s.c2)])); return; }
+    if(/^[0-9.,]$/.test(e.key) && !e.ctrlKey && !e.metaKey){ e.preventDefault(); const td=tb.querySelector(`td[data-r="${s.r2}"][data-c="${s.c2}"]`); if(td) startEdit(td,e.key); return; }
+  });
+  tb.addEventListener("paste",e=>{
+    const txt=(e.clipboardData||window.clipboardData).getData("text"); if(!txt) return; e.preventDefault();
+    const rows=txt.trim().split(/\r?\n/).map(l=>l.split(/[\t; ]+/).map(x=>parseFloat(x.replace(",","."))));
+    const [a0,,b0]=sel(); const list=[];
+    rows.forEach((row,i)=>row.forEach((v,j)=>{ const r=a0+i,c=b0+j; if(r<R&&c<C&&!isNaN(v)) list.push({a:at(r,c),w:1,v:toRaw(t,v)}); }));
+    if(applyEdits(list,`${t.id}: вставка`)) toast(`Вставлено значений: ${list.length}`);
+  });
+  sc.append(tb); wrap.append(sc);
+  const lg=document.createElement("div"); lg.className="legend";
+  lg.innerHTML=`<span class="mono">${disp(t,lo)}</span><span class="ramp" style="background:linear-gradient(90deg,${[0,.25,.5,.75,1].map(f=>heat(lo+(hi-lo)*f,lo,hi)).join(",")})"></span><span class="mono">${disp(t,hi)}</span>
+  <span>· строки — обороты (${t.hi?"ось высоких кулачков 0x6028":"ось низких кулачков 0x6000"}), столбцы — нагрузка 0xE3 в % от полной шкалы (растёт с MAP, 100% ≈ полный газ). ${unitOf(t)?unitOf(t).note:(t.u?"Показаны сырые байты.":"Значения — сырые байты; топливо линейно: +10% к байту = +10% длительности впрыска.")}</span>`;
+  wrap.append(lg);
+  requestAnimationFrame(()=>{ if(document.activeElement===document.body) tb.focus({preventScroll:true}); });
+  return wrap;
+}
+function markSel(tb,[r0,r1,c0,c1]){
+  tb.querySelectorAll("td").forEach(td=>{ const r=+td.dataset.r,c=+td.dataset.c;
+    td.classList.toggle("sel", r>=r0&&r<=r1&&c>=c0&&c<=c1); td.classList.toggle("cur", r===S.cell.r2&&c===S.cell.c2); });
+}
+
+/* ---------- 1D point tables ---------- */
+function xLabel(t,x,w){
+  if(t.x==="RPMb" && w===1) return `${x} (${rpmB(x)} об/мин)`;
+  if(t.x==="ECT" && w===1) return `${x} (≈${Math.round(ectC(x))} °C)`;
+  if((t.x==="MAP"||t.x==="BARO") && w===1) return `${x} (≈${Math.round(mapKpa(x))} кПа)`;
+  return ""+x;
+}
+function editableCell(td,get,set,label){
+  td.className="ed"; td.tabIndex=0;
+  const show=()=>{ td.innerHTML=""; const s=document.createElement("span"); s.textContent=get(); td.append(s); };
+  show();
+  const start=()=>{ if(td.querySelector("input")) return; const inp=document.createElement("input"); inp.type="text"; inp.inputMode="numeric"; inp.value=get(); inp.setAttribute("aria-label",label);
+    td.innerHTML=""; td.append(inp); inp.focus(); inp.select(); let done=false;
+    const fin=ok=>{ if(done) return; done=true; const v=parseFloat(inp.value.replace(",",".")); if(ok && !isNaN(v)) { if(!set(v)) show(); } else show(); };
+    inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); fin(true);} if(e.key==="Escape"){ e.preventDefault(); fin(false);} };
+    inp.onblur=()=>fin(true); };
+  td.onclick=start; td.onkeydown=e=>{ if(e.key==="Enter"||/^[0-9.]$/.test(e.key)){ e.preventDefault(); start(); if(/^[0-9.]$/.test(e.key)){ const i=td.querySelector("input"); i.value=e.key; } } };
+}
+function ptsEditor(t,L){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="10px";
+  const ys=L.pts.map(p=>p.y);
+  wrap.append(toolbar((op,val)=>{
+    if(op==="smooth"||op==="interp"){
+      const v=ys.map(f=>rd(S.cur,f.a,f.w)); const list=[];
+      if(op==="smooth") v.forEach((x,i)=>{ if(i>0&&i<v.length-1) list.push({...ys[i],v:(v[i-1]+2*x+v[i+1])/4}); });
+      else v.forEach((x,i)=>list.push({...ys[i],v:v[0]+(v[v.length-1]-v[0])*i/Math.max(1,v.length-1)}));
+      applyEdits(list,`${t.id}: ${op}`); return;
+    }
+    applyEdits(ys.map(f=>({...f,v:opValue(op,rd(S.cur,f.a,f.w),val,rd(S.orig,f.a,f.w),S.ref?rd(S.ref,f.a,f.w):rd(S.cur,f.a,f.w),t)})),`${t.id}: ${op}`);
+  },"Операции применяются ко всем значениям y. Клик по числу — правка; x тоже можно менять. Точки идут по убыванию x, последняя обычно x = 0.",t));
+  const sp=document.createElement("div"); sp.className="split";
+  const sc=document.createElement("div"); sc.className="scroll";
+  const tb=document.createElement("table"); tb.className="pts";
+  tb.innerHTML=`<thead><tr><th>#</th><th>адрес</th><th>x (${XIN[t.x]||"вход"})</th><th>y${unitOf(t)?", "+unitOf(t).s:""}</th>${S.ref?"<th>эталон y</th>":""}</tr></thead>`;
+  const body=document.createElement("tbody");
+  L.pts.forEach((p,i)=>{
+    const tr=document.createElement("tr");
+    const cell=(txt,ro)=>{ const td=document.createElement("td"); if(ro){ td.className="ro"; td.textContent=txt; } tr.append(td); return td; };
+    cell(i+1,true); cell("0x"+hex(p.x.a),true);
+    for(const f of [p.x,p.y]){
+      const td=cell("",false);
+      editableCell(td,()=> f===p.x ? xLabel(t,rd(S.cur,f.a,f.w),f.w) : disp(t,rd(S.cur,f.a,f.w)), v=>applyEdits([{...f,v: f===p.x ? v : toRaw(t,v)}],`${t.id}: точка ${i+1}`), "Значение");
+      if(rd(S.cur,f.a,f.w)!==rd(S.orig,f.a,f.w)) td.classList.add("chg");
+      if(S.ref && rd(S.cur,f.a,f.w)!==rd(S.ref,f.a,f.w)) td.classList.add("rdf");
+      td.title=`0x${hex(f.a)} · было ${rd(S.orig,f.a,f.w)}`;
+    }
+    if(S.ref) cell(disp(t,rd(S.ref,p.y.a,p.y.w)),true);
+    body.append(tr);
+  });
+  tb.append(body); sc.append(tb); sp.append(sc);
+  const yk = unitOf(t) ? unitOf(t).k : 1;
+  sp.append(lineChart(L.pts.map(p=>[rd(S.cur,p.x.a,p.x.w),rd(S.cur,p.y.a,p.y.w)*yk]), S.ref?L.pts.map(p=>[rd(S.ref,p.x.a,p.x.w),rd(S.ref,p.y.a,p.y.w)*yk]):null, L.pts.map(p=>[rd(S.orig,p.x.a,p.x.w),rd(S.orig,p.y.a,p.y.w)*yk]), t.x==="RPMb"?(x=>rpmB(x)):null));
+  wrap.append(sp); return wrap;
+}
+function lineChart(cur,ref,orig,xfmt){
+  const box=document.createElement("div"); box.className="chart";
+  const all=[...cur,...(ref||[]),...orig];
+  const xs=all.map(p=>p[0]), ys=all.map(p=>p[1]);
+  let x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  if(x1===x0) x1=x0+1; if(y1===y0){ y1+=1; y0-=1; }
+  const W=560,H=260,ml=52,mr=14,mt=12,mb=34;
+  const X=x=>ml+(x-x0)/(x1-x0)*(W-ml-mr), Y=y=>mt+(1-(y-y0)/(y1-y0))*(H-mt-mb);
+  const path=pts=>[...pts].sort((a,b)=>a[0]-b[0]).map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join("");
+  let g=""; for(let i=0;i<=4;i++){ const yv=y0+(y1-y0)*i/4, yy=Y(yv); g+=`<line x1="${ml}" x2="${W-mr}" y1="${yy}" y2="${yy}" stroke="var(--line)" stroke-width="1"/><text x="${ml-6}" y="${yy+4}" text-anchor="end" font-size="11" fill="var(--muted)">${Math.round(yv)}</text>`; }
+  for(let i=0;i<=4;i++){ const xv=x0+(x1-x0)*i/4; g+=`<text x="${X(xv)}" y="${H-12}" text-anchor="middle" font-size="11" fill="var(--muted)">${xfmt?xfmt(Math.round(xv)):Math.round(xv)}</text>`; }
+  const dots=cur.map(p=>`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="3.2" fill="var(--accent)"/>`).join("");
+  box.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="График таблицы" font-family="JetBrains Mono, monospace">${g}
+    <path d="${path(orig)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4"/>
+    ${ref?`<path d="${path(ref)}" fill="none" stroke="var(--ref)" stroke-width="1.5"/>`:""}
+    <path d="${path(cur)}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>${dots}</svg>
+    <div class="legend"><span style="color:var(--accent)">━ текущее</span><span>┄ исходное</span>${ref?`<span style="color:var(--ref)">━ эталон</span>`:""}${xfmt?"<span>ось x — об/мин</span>":""}</div>`;
+  return box;
+}
+
+/* ---------- words ---------- */
+function wordsEditor(t,L){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="10px";
+  const fields=[]; for(let i=0;i<L.count;i++) fields.push({a:t.a+2*i,w:2});
+  wrap.append(toolbar((op,val)=>{ if(op==="smooth"||op==="interp") return toast("Для этой таблицы операция не нужна");
+    applyEdits(fields.map(f=>({...f,v:opValue(op,rd(S.cur,f.a,2),val,rd(S.orig,f.a,2),S.ref?rd(S.ref,f.a,2):rd(S.cur,f.a,2))})),`${t.id}: ${op}`); },
+    L.rpm?"Значения — период; об/мин = 1 875 000 / x. Можно править и период, и обороты.":"16-битные значения, little-endian."));
+  const sc=document.createElement("div"); sc.className="scroll";
+  const tb=document.createElement("table"); tb.className="pts";
+  tb.innerHTML=`<thead><tr><th>#</th><th>адрес</th><th>значение</th>${L.rpm?"<th>об/мин</th>":""}<th>исходное</th>${S.ref?"<th>эталон</th>":""}</tr></thead>`;
+  const body=document.createElement("tbody");
+  fields.forEach((f,i)=>{
+    const tr=document.createElement("tr"); const ro=txt=>{ const td=document.createElement("td"); td.className="ro"; td.textContent=txt; tr.append(td); };
+    ro(i+1); ro("0x"+hex(f.a));
+    const td=document.createElement("td"); tr.append(td);
+    editableCell(td,()=>""+rd(S.cur,f.a,2),v=>applyEdits([{...f,v}],`${t.id}: слово ${i+1}`),"Значение");
+    if(rd(S.cur,f.a,2)!==rd(S.orig,f.a,2)) td.classList.add("chg"); if(S.ref&&rd(S.cur,f.a,2)!==rd(S.ref,f.a,2)) td.classList.add("rdf");
+    if(L.rpm){ const td2=document.createElement("td"); tr.append(td2);
+      editableCell(td2,()=>""+per2rpm(rd(S.cur,f.a,2)),v=>v>0?applyEdits([{...f,v:1875000/v}],`${t.id}: об/мин ${i+1}`):false,"Обороты"); }
+    ro(rd(S.orig,f.a,2)+(L.rpm?` (${per2rpm(rd(S.orig,f.a,2))})`:""));
+    if(S.ref) ro(rd(S.ref,f.a,2)+(L.rpm?` (${per2rpm(rd(S.ref,f.a,2))})`:""));
+    body.append(tr);
+  });
+  tb.append(body); sc.append(tb); wrap.append(sc); return wrap;
+}
+
+/* ---------- per-row tables ---------- */
+function rowEditor(t,L){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="10px";
+  const ax=L.noAxis ? [] : rpmAxis(S.cur,t.hi);
+  const fields=[]; for(let i=0;i<L.count;i++) fields.push({a:t.a+i,w:1});
+  wrap.append(toolbar((op,val)=>{
+    const v=fields.map(f=>S.cur[f.a]); let list;
+    if(op==="smooth") list=fields.map((f,i)=>({...f,v:i&&i<v.length-1?(v[i-1]+2*v[i]+v[i+1])/4:v[i]}));
+    else if(op==="interp") list=fields.map((f,i)=>({...f,v:v[0]+(v[v.length-1]-v[0])*i/(v.length-1)}));
+    else list=fields.map(f=>({...f,v:opValue(op,S.cur[f.a],val,S.orig[f.a],S.ref?S.ref[f.a]:S.cur[f.a],t)}));
+    applyEdits(list,`${t.id}: ${op}`);
+  }, L.noAxis ? "Список отдельных значений." : `Одно значение на строку оси RPM (${t.hi?"высокие кулачки, 0x6028":"низкие кулачки, 0x6000"}).`, t));
+  const sp=document.createElement("div"); sp.className="split";
+  const sc=document.createElement("div"); sc.className="scroll";
+  const tb=document.createElement("table"); tb.className="pts";
+  tb.innerHTML=`<thead><tr><th>${L.noAxis?"#":"строка"}</th><th>${L.noAxis?"":"об/мин"}</th><th>адрес</th><th>значение${unitOf(t)?", "+unitOf(t).s:""}</th><th>исходное</th>${S.ref?"<th>эталон</th>":""}</tr></thead>`;
+  const body=document.createElement("tbody");
+  fields.forEach((f,i)=>{
+    const tr=document.createElement("tr"); const ro=txt=>{ const td=document.createElement("td"); td.className="ro"; td.textContent=txt; tr.append(td); };
+    ro(i); ro(ax[i]??""); ro("0x"+hex(f.a));
+    const td=document.createElement("td"); tr.append(td);
+    editableCell(td,()=>disp(t,S.cur[f.a]),v=>applyEdits([{...f,v:toRaw(t,v)}],`${t.id}: строка ${i}`),"Значение");
+    if(S.cur[f.a]!==S.orig[f.a]) td.classList.add("chg"); if(S.ref&&S.cur[f.a]!==S.ref[f.a]) td.classList.add("rdf");
+    ro(disp(t,S.orig[f.a])); if(S.ref) ro(disp(t,S.ref[f.a]));
+    body.append(tr);
+  });
+  tb.append(body); sc.append(tb); sp.append(sc);
+  const rk = unitOf(t) ? unitOf(t).k : 1;
+  sp.append(lineChart(fields.map((f,i)=>[ax[i]||i,S.cur[f.a]*rk]), S.ref?fields.map((f,i)=>[ax[i]||i,S.ref[f.a]*rk]):null, fields.map((f,i)=>[ax[i]||i,S.orig[f.a]*rk]), null));
+  wrap.append(sp); return wrap;
+}
+
+/* ---------- hex editor ---------- */
+function hexEditor(start,len,t){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="10px";
+  if(t) wrap.append(toolbar((op,val)=>{ if(op==="smooth"||op==="interp") return toast("Для байтовой таблицы операция не нужна");
+    const list=[]; for(let a=t.a;a<t.a+t.n;a++) list.push({a,w:1,v:opValue(op,S.cur[a],val,S.orig[a],S.ref?S.ref[a]:S.cur[a])}); applyEdits(list,`${t.id}: ${op}`); },"Клик по байту — правка в hex. Формат таблицы не определён, поэтому показаны байты."));
+  const base=start&~15, end=Math.min(ROMSIZE,start+len);
+  const sc=document.createElement("div"); sc.className="scroll hexwrap";
+  const tb=document.createElement("table"); tb.className="hex";
+  let h="<thead><tr><th></th>"+[...Array(16).keys()].map(i=>`<th>${hex(i,1)}</th>`).join("")+"</tr></thead><tbody>";
+  for(let r=base;r<end;r+=16){
+    h+=`<tr><th>${hex(r)}</th>`;
+    for(let c=0;c<16;c++){ const a=r+c; const inT=a>=start&&a<end;
+      h+= inT ? `<td data-a="${a}" class="${S.cur[a]!==S.orig[a]?"chg":""}" title="0x${hex(a)} = ${S.cur[a]} · было ${hex(S.orig[a],2)}${S.ref?" · эталон "+hex(S.ref[a],2):""}" style="${S.ref&&S.cur[a]!==S.ref[a]?"box-shadow:inset 0 -2px 0 var(--ref)":""}">${hex(S.cur[a],2)}</td>` : `<td style="opacity:.25">··</td>`; }
+    h+="</tr>";
+  }
+  tb.innerHTML=h+"</tbody>";
+  tb.onclick=e=>{ const td=e.target.closest("td[data-a]"); if(!td||td.querySelector("input")) return; const a=+td.dataset.a;
+    const inp=document.createElement("input"); inp.value=hex(S.cur[a],2); inp.maxLength=2; inp.setAttribute("aria-label","Байт 0x"+hex(a)); td.textContent=""; td.append(inp); inp.focus(); inp.select(); let done=false;
+    const fin=ok=>{ if(done) return; done=true; const v=parseInt(inp.value,16); if(!(ok&&!isNaN(v)&&applyEdits([{a,w:1,v}],`0x${hex(a)}`))) refresh(); };
+    inp.onkeydown=ev=>{ if(ev.key==="Enter") fin(true); if(ev.key==="Escape") fin(false); }; inp.onblur=()=>fin(true); };
+  sc.append(tb); wrap.append(sc); return wrap;
+}
+
+/* ---------- side panels: changes, checksum, raw access ---------- */
+function sidePanels(t){
+  const box=document.createElement("div"); box.style.display="grid"; box.style.gridTemplateColumns="repeat(auto-fit,minmax(260px,1fr))"; box.style.gap="12px";
+  // changes
+  const ch=document.createElement("div"); ch.className="panel"; ch.innerHTML="<h2>Изменения</h2>";
+  const lst=document.createElement("div"); lst.className="changes";
+  let covered=new Set(), any=false;
+  for(const tt of CATALOG){ const n=diffCount(S.cur,S.orig,tt); for(let i=tt.a;i<tt.a+tt.n;i++) covered.add(i); if(!n) continue; any=true;
+    const b=document.createElement("button"); b.innerHTML=`<span class="ad">${tt.id}</span><span></span><span class="n">${n}</span>`; b.children[1].textContent=tt.t;
+    b.onclick=()=>{ S.sel=tt.id; S.cell=null; refresh(); }; lst.append(b); }
+  const other=[]; for(let i=0;i<ROMSIZE;i++) if(S.cur[i]!==S.orig[i] && !covered.has(i)) other.push(i);
+  if(other.length){ any=true; const b=document.createElement("button"); b.innerHTML=`<span class="ad">байты</span><span>Вне таблиц: ${other.slice(0,6).map(a=>"0x"+hex(a)).join(", ")}${other.length>6?"…":""}</span><span class="n">${other.length}</span>`;
+    b.onclick=()=>openHex(other[0]); lst.append(b); }
+  if(!any){ const p=document.createElement("div"); p.className="axisnote"; p.textContent="Пока ничего не изменено."; lst.append(p); }
+  ch.append(lst);
+  if(any){ const r=document.createElement("button"); r.className="btn small"; r.style.marginTop="8px"; r.textContent="Сбросить эту таблицу";
+    r.onclick=()=>{ const list=[]; for(let a=t.a;a<t.a+t.n;a++) list.push({a,w:1,v:S.orig[a]}); if(!applyEdits(list,`${t.id}: сброс`)) toast("В этой таблице нет изменений"); }; ch.append(r); }
+  box.append(ch);
+  // checksum + options
+  const ck=document.createElement("div"); ck.className="panel"; ck.innerHTML="<h2>Контрольная сумма</h2>";
+  const s=sum(S.cur);
+  const kv=document.createElement("dl"); kv.className="kv mono";
+  kv.innerHTML=`<dt>сумма байт</dt><dd>${hex(s,2)} ${s===0?"(OK)":"(должна быть 00)"}</dd><dt>байт 0x3A</dt><dd>${hex(S.cur[CKSUM_FIX],2)}${S.cur[CKSUM_FIX]!==S.orig[CKSUM_FIX]?" (было "+hex(S.orig[CKSUM_FIX],2)+")":""}</dd><dt>0x7FF1</dt><dd>${hex(S.cur[CKSUM_FLAG],2)} — проверка ${S.cur[CKSUM_FLAG]?"включена":"выключена"}</dd>`;
+  ck.append(kv);
+  const lab=document.createElement("label"); lab.className="toggle"; lab.style.marginTop="8px";
+  lab.innerHTML=`<input type="checkbox" id="fixCk" ${S.fixCk?"checked":""}> Исправлять сумму при скачивании (байт 0x3A)`;
+  lab.querySelector("input").onchange=e=>{ S.fixCk=e.target.checked; renderHeader(); };
+  ck.append(lab);
+  const fixNow=document.createElement("button"); fixNow.className="btn small"; fixNow.style.marginTop="8px"; fixNow.textContent="Исправить сейчас"; fixNow.disabled=s===0;
+  fixNow.onclick=()=>applyEdits([{a:CKSUM_FIX,w:1,v:(S.cur[CKSUM_FIX]-s+256)&255}],"контрольная сумма");
+  ck.append(fixNow);
+  box.append(ck);
+  // raw access
+  const rw=document.createElement("div"); rw.className="panel"; rw.innerHTML=`<h2>Произвольный адрес</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="rawAddr" class="mono" placeholder="например 7FF0" style="width:120px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg)"><button class="btn small" id="rawGo">Открыть 256 байт</button></div><p class="axisnote" style="margin:8px 0 0">Любой участок ROM в шестнадцатеричном виде, например код или флаги в конце ROM.</p>`;
+  rw.querySelector("#rawGo").onclick=()=>{ const v=parseInt(rw.querySelector("#rawAddr").value.replace(/^0x/i,""),16); if(isNaN(v)||v<0||v>=ROMSIZE) return toast("Адрес от 0000 до 7FFF"); openHex(v); };
+  box.append(rw);
+  return box;
+}
+function openHex(a){
+  S.sel=null; renderList(); const p=$("#pane"); p.innerHTML="";
+  const d=document.createElement("div"); d.className="titlebar"; d.innerHTML=`<h1>ROM 0x${hex(a&~15)}–0x${hex(Math.min(ROMSIZE,(a&~15)+256)-1)}</h1><div class="meta">Байты в шестнадцатеричном виде. Клик по байту — правка.</div>`;
+  const back=document.createElement("button"); back.className="btn small"; back.textContent="← К таблицам"; back.style.marginTop="8px"; back.onclick=()=>{ S.sel="63F8"; refresh(); }; d.append(back);
+  p.append(d, hexEditor(a&~15,256,null), sidePanels({a:a&~15,n:256,id:hex(a)}));
+}
+
+/* ---------- download ---------- */
+function crc32(buf){ let c,crc=0xFFFFFFFF; for(let i=0;i<buf.length;i++){ c=(crc^buf[i])&255; for(let k=0;k<8;k++) c=c&1?(c>>>1)^0xEDB88320:c>>>1; crc=(crc>>>8)^c; } return (crc^0xFFFFFFFF)>>>0; }
+function zipOne(name,data){
+  const enc=new TextEncoder().encode(name), crc=crc32(data), d=new Date();
+  const time=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1), date=((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate();
+  const lh=new DataView(new ArrayBuffer(30)); lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(8,0,true); lh.setUint16(10,time,true); lh.setUint16(12,date,true); lh.setUint32(14,crc,true); lh.setUint32(18,data.length,true); lh.setUint32(22,data.length,true); lh.setUint16(26,enc.length,true);
+  const ch=new DataView(new ArrayBuffer(46)); ch.setUint32(0,0x02014b50,true); ch.setUint16(4,20,true); ch.setUint16(6,20,true); ch.setUint16(12,time,true); ch.setUint16(14,date,true); ch.setUint32(16,crc,true); ch.setUint32(20,data.length,true); ch.setUint32(24,data.length,true); ch.setUint16(28,enc.length,true);
+  const cdOff=30+enc.length+data.length, cdLen=46+enc.length;
+  const ed=new DataView(new ArrayBuffer(22)); ed.setUint32(0,0x06054b50,true); ed.setUint16(8,1,true); ed.setUint16(10,1,true); ed.setUint32(12,cdLen,true); ed.setUint32(16,cdOff,true);
+  return new Blob([lh,enc,data,ch,enc,ed],{type:"application/zip"});
+}
+function outName(){ const b=S.name.replace(/\.[^.]*$/,""); return b+"_edit.bin"; }
+async function save(){
+  if(!S.cur) return;
+  const out=new Uint8Array(S.cur);
+  const s=sum(out);
+  if(s!==0 && S.fixCk){ out[CKSUM_FIX]=(out[CKSUM_FIX]-s+256)&255; }
+  const name=outName();
+  const url=URL.createObjectURL(new Blob([out],{type:"application/octet-stream"}));
+  const a=document.createElement("a"); a.href=url; a.download=name; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000);
+  toast(`Скачано: ${name}${s!==0&&S.fixCk?" — сумма исправлена байтом 0x3A":""}`);
+}
+
+/* ---------- misc ---------- */
+let toastT; function toast(m){ const t=$("#toast"); t.textContent=m; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,3500); }
+function refresh(){ renderHeader(); renderList(); renderPane(); }
+
+$("#fileIn").onchange=e=>{ if(e.target.files[0]) loadMain(e.target.files[0]); e.target.value=""; };
+$("#refIn").onchange=e=>{ if(!S.cur){ toast("Сначала откройте основную прошивку"); e.target.value=""; return; } if(e.target.files[0]) loadRef(e.target.files[0]); e.target.value=""; };
+$("#undoBtn").onclick=undo; $("#redoBtn").onclick=redo; $("#saveBtn").onclick=save;
+$("#q").oninput=e=>{ S.q=e.target.value; renderList(); };
+$("#expAll").onclick=()=>{ S.collapsed.clear(); saveCollapsed(); renderList(); };
+$("#colAll").onclick=()=>{ for(const t of CATALOG) S.collapsed.add(t.lg); saveCollapsed(); renderList(); };
+document.querySelectorAll("#filters .chip").forEach(b=>b.onclick=()=>{ const f=b.dataset.f; if(S.filters.has(f)) S.filters.delete(f); else S.filters.add(f); b.setAttribute("aria-pressed",S.filters.has(f)); renderList(); });
+document.addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT") return; if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="z"){ e.preventDefault(); e.shiftKey?redo():undo(); } if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="y"){ e.preventDefault(); redo(); } });
+["dragover","dragenter"].forEach(ev=>document.addEventListener(ev,e=>{ e.preventDefault(); const d=$("#drop"); if(d) d.classList.add("over"); }));
+["dragleave","drop"].forEach(ev=>document.addEventListener(ev,e=>{ const d=$("#drop"); if(d) d.classList.remove("over"); }));
+document.addEventListener("drop",e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(f) loadMain(f); });
+window.addEventListener("beforeunload",e=>{ if(S.undo.length){ e.preventDefault(); e.returnValue=""; } });
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>S.cur&&renderPane());
+
+S.sel="63F8";
+refresh();
+</script>
+</body>
+</html>
