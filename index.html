@@ -210,6 +210,27 @@ const EGR = { patches:[ {a:0x34A1, on:[0xDA,0x1E,0x09], off:[0x03,0x75,0x35], on
 CATALOG.push({a:0x34A1, n:3, f:"feat", x:"", g:G_FEAT, t:"EGR: отключение", c:"~", u:"", hi:false, id:"EGR", feat:true,
   bytes:EGR.patches.flatMap(p=>p.on.map((_,i)=>p.a+i)), pane:egrPane,
   d:"Отключение рециркуляции отработавших газов патчем кода в 0x34A1 и 0x3A76: цель подъёма клапана всегда 0, соленоид выключен, проверка датчика подъёма пропущена"});
+// Code 29 off: the fuel-trim limit check is entered through J 0x6DD0 at 0x16A5; jump straight to the "no fault" branch instead
+const C29 = { a:0x16A5, on:[0x03,0xD0,0x6D], off:[0x03,0xB7,0x16], on_s:"J 0x6DD0", off_s:"J 0x16B7" };
+function c29State(buf){ const m=k=>C29[k].every((v,i)=>buf[C29.a+i]===v); return m("on")?"on":m("off")?"off":"unknown"; }
+CATALOG.push({a:C29.a, n:3, f:"feat", x:"", g:G_FEAT, t:"Код 29: отключение", c:"✔", u:"", hi:false, id:"C29", feat:true,
+  bytes:[C29.a, C29.a+1, C29.a+2], pane:c29Pane,
+  d:"Отключение кода 29 (коррекция топлива по O2 вне ×0.73…×1.47) патчем кода в 0x16A5: проверка пропускается, флаг кода всегда сброшен"});
+// Clear trouble codes after N (3..10) ignition cycles without engine start; N = operand of CMPB at 0x7F22 (added code at 0x7F10, state byte 0x337 in the warm-kept area)
+const CCL = { code:0x7F10, sites:[
+  {a:0x090A, on:[0x32,0xEB,0x6E], off:[0x32,0x10,0x7F], on_s:"CAL 0x6EEB", off_s:"CAL 0x7F10"},
+  {a:0x1077, on:[0x03,0x16,0x11], off:[0x03,0x35,0x7F], on_s:"J 0x1116", off_s:"J 0x7F35"} ],
+  body:[0xF5,0xD4,0xCE,0x1E,0x62,0x37,0x03,0xF2,0xC5,0x06,0x2F,0xCA,0x10,0xD6,0x0F,0x86,0x01,0xC6,0x03,0xCA,0x09,0x54,0x57,0x76,0x00,0x32,0x9C,0x4C,0x64,0xFA,0x62,0x37,0x03,0xD2,0x03,0xEB,0x6E,0x54,0x57,0x76,0x00,0xC4,0x37,0x1F,0x64,0x03,0x16,0x11], nIdx:0x12, nMin:3, nMax:10, nDef:3 };
+function cclState(buf){
+  const m=(arr,a)=>arr.every((v,i)=>buf[a+i]===v);
+  const stock = CCL.sites.every(s=>m(s.on,s.a)) && CCL.body.every((_,i)=>buf[CCL.code+i]===0xFF);
+  const n = buf[CCL.code+CCL.nIdx];
+  const inst = CCL.sites.every(s=>m(s.off,s.a)) && CCL.body.every((v,i)=>i===CCL.nIdx || buf[CCL.code+i]===v) && n>=CCL.nMin && n<=CCL.nMax;
+  return inst?"on":stock?"off":"unknown";
+}
+CATALOG.push({a:CCL.code, n:CCL.body.length, f:"feat", x:"", g:G_FEAT, t:"Сброс кодов циклами зажигания", c:"~", u:"", hi:false, id:"CCL", feat:true,
+  bytes:[...CCL.sites.flatMap(s=>s.on.map((_,i)=>s.a+i)), ...CCL.body.map((_,i)=>CCL.code+i)], pane:cclPane,
+  d:"Добавляет в прошивку стирание кодов неисправностей без снятия питания: N циклов (3–10) «включить — выключить зажигание» подряд без запуска двигателя, при следующем включении коды стираются штатной подпрограммой 0x4C9C"});
 // Config-bit switches: byte 2 of the board variant reaches r_cfg (0x220) through ANDB A,#imm at 0x0FF0 (stock mask 0x5D).
 // Clearing a bit of that mask turns the feature off for every variant: 0x04 -> r_cfg.2 (ELD), 0x10 -> r_cfg.4 (TCS).
 const CFGM = { a:0x0FF1, op:0xD6, stock:0x5D, own:0x14 };
@@ -405,7 +426,7 @@ function emptyState(){
   d.innerHTML=`<h1>Откройте прошивку P13</h1>
   <p>Редактор работает с 32-килобайтным образом ROM Honda P13 (OKI M66911). Файл никуда не отправляется: он читается и изменяется прямо в браузере.</p>
   <ul><li>${CATALOG.filter(t=>!t.feat).length} таблиц с установленным назначением: основные карты топлива и зажигания, оси RPM и нагрузки, VTEC, ограничитель оборотов, коррекции</li>
-  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит), отключение EGR, ELD, TCS и проверки контрольной суммы</li>
+  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит), отключение EGR, ELD, TCS, кода 29 и проверки контрольной суммы, сброс кодов циклами зажигания (3–10)</li>
   <li>отмена и повтор, сравнение с эталонной прошивкой, вставка из Excel</li>
   <li>при скачивании контрольная сумма исправляется автоматически</li></ul>
   <label class="btn primary" for="fileIn2">Выбрать файл .bin<input type="file" id="fileIn2" accept=".bin,.BIN,application/octet-stream"></label>
@@ -594,6 +615,87 @@ function tcsPane(preview){
     w.textContent="В этой прошивке TCS уже выключена во всех допустимых вариантах конфигурации (машина без TCS) — патч ничего не изменит."; pn.append(w); }
   const w2=document.createElement("div"); w2.className="msg warn"; w2.style.marginTop="10px";
   w2.textContent="Нужно, если плата закодирована под TCS (вариант 6), а блок TCS снят или не работает. Без TCS ЭБУ не ограничивает мощность при пробуксовке. В машине патч не проверялся.";
+  pn.append(w2);
+  wrap.append(pn);
+  return wrap;
+}
+
+/* ---------- ignition-cycle code clear ---------- */
+function cclPane(preview){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="14px";
+  const d=document.createElement("div"); d.className="titlebar";
+  d.innerHTML=`<h1>Сброс кодов циклами зажигания</h1><div class="meta mono"><span>новый код 0x7F10–0x7F3F</span><span>вызовы 0x090A, 0x1077</span><span>байт состояния 0x337</span><span>число циклов — 0x7F22</span><span>~ по разбору кода, в машине не проверено</span></div>
+  <div class="note">В стоке коды неисправностей хранятся в памяти с постоянным питанием (0x330–0x35D) и стираются только снятием питания ЭБУ или командой дилерского тестера. Этот патч добавляет третий способ: <b>N раз подряд включить и выключить зажигание, не запуская двигатель</b> (N задаётся от 3 до 10) — при следующем включении коды стираются. Заводить можно сразу. Если в каком-то из циклов двигатель вращался (даже прокрутка стартером), счёт начинается заново. Обученные значения (холостой ход и т. п.) не сбрасываются — стираются только коды, как командой тестера.</div>`;
+  wrap.append(d);
+  if(preview){ const n=document.createElement("div"); n.className="note"; n.textContent="Загрузите прошивку, чтобы добавить или убрать функцию."; d.append(n); return wrap; }
+  const st=cclState(S.cur), o=cclState(S.orig), curN=S.cur[CCL.code+CCL.nIdx];
+  const NAME={on:"функция добавлена", off:"сток (функции нет)", unknown:"место занято или код изменён иначе"};
+  const pn=document.createElement("div"); pn.className="panel"; pn.style.maxWidth="640px"; pn.innerHTML="<h2>Настройка</h2>";
+  const status=document.createElement("p"); status.style.margin="0 0 10px";
+  status.innerHTML = st==="on" ? `<b style="color:var(--changed)">Добавлена:</b> ${curN} циклов зажигания без запуска стирают коды (при ${curN+1}-м включении).`
+    : st==="off" ? `<b style="color:var(--good)">Сток:</b> коды стираются только снятием питания или тестером.`
+    : `<b style="color:var(--bad)">Неизвестное состояние:</b> байты 0x090A/0x1077 или область 0x7F10–0x7F3F не совпадают ни со стоком, ни с патчем — возможно, это место занято другим патчем.`;
+  if(o!==st){ const s=document.createElement("span"); s.className="axisnote"; s.textContent=` В исходном файле: ${NAME[o]}.`; status.append(s); }
+  pn.append(status);
+  const lab=document.createElement("label"); lab.className="toggle";
+  lab.innerHTML=`<input type="checkbox" ${st==="on"?"checked":""} ${st==="unknown"?"disabled":""}> Сброс кодов циклами зажигания`;
+  lab.querySelector("input").onchange=e=>{
+    const on=e.target.checked, ed=[];
+    for(const s of CCL.sites) (on?s.off:s.on).forEach((v,i)=>ed.push({a:s.a+i, w:1, v}));
+    const n=cclNVal()??CCL.nDef;
+    CCL.body.forEach((v,i)=>ed.push({a:CCL.code+i, w:1, v: on ? (i===CCL.nIdx ? n : v) : 0xFF}));
+    if(applyEdits(ed, on?`сброс кодов циклами: добавлен (${n})`:"сброс кодов циклами: убран")) toast(on?`Добавлен сброс кодов: ${n} циклов зажигания без запуска`:"Сброс кодов циклами убран (сток)");
+  };
+  pn.append(lab);
+  const row=document.createElement("div"); row.style.cssText="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px";
+  row.innerHTML=`<span>Число циклов без запуска:</span><input type="number" min="${CCL.nMin}" max="${CCL.nMax}" step="1" class="mono" style="width:5em" value="${st==="on"?curN:CCL.nDef}"><button class="btn small">Установить</button><span class="axisnote">от ${CCL.nMin} до ${CCL.nMax}</span>`;
+  const inp=row.querySelector("input");
+  function cclNVal(){ const v=Number(inp.value); return Number.isInteger(v)&&v>=CCL.nMin&&v<=CCL.nMax ? v : null; }
+  const setN=()=>{ const v=cclNVal(); if(v===null) return toast(`Число циклов — целое от ${CCL.nMin} до ${CCL.nMax}`);
+    if(st!=="on") return toast("Сначала включите функцию переключателем — число будет взято из поля");
+    if(applyEdits([{a:CCL.code+CCL.nIdx, w:1, v}],`сброс кодов циклами: ${v}`)) toast(`Сброс кодов: ${v} циклов зажигания без запуска`); else toast(`Уже ${v}`); };
+  row.querySelector("button").onclick=setN; inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); setN(); } };
+  pn.append(row);
+  const hint=document.createElement("p"); hint.className="axisnote"; hint.style.margin="10px 0 0";
+  hint.textContent = CCL.sites.map(z=>`0x${hex(z.a)}: ${z.on.map(v=>hex(v,2)).join(" ")} (${z.on_s}) → ${z.off.map(v=>hex(v,2)).join(" ")} (${z.off_s})`).join("; ")
+    + ". Код в 0x7F10 (48 байт, в стоке там FF): при каждом включении зажигания (только при настоящем включении, не при внутреннем перезапуске ЭБУ — проверяется код причины сброса 0xD4) счётчик в 0x337 растёт; если в прошлом цикле двигатель вращался — обнуляется; когда число циклов без запуска достигает N (байт 0x7F22 — операнд CMPB A, #N, 3–10), вызывается 0x4C9C. Счётчик — биты 0–3 байта 0x337. Пока двигатель вращается, ставится бит 7 в 0x337. Байт 0x337 хранится вместе с кодами и в стоке не используется. Исходник патча — docs/patches/ignition_code_clear.asm в репозитории.";
+  pn.append(hint);
+  const w2=document.createElement("div"); w2.className="msg warn"; w2.style.marginTop="10px";
+  w2.textContent="Патч проверен разбором кода и сборкой, но не в машине. Сохраните исходную прошивку. Если после прошивки ЭБУ ведёт себя странно при включении зажигания — верните сток.";
+  pn.append(w2);
+  wrap.append(pn);
+  return wrap;
+}
+
+/* ---------- code 29 quick setting ---------- */
+function c29Pane(preview){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="14px";
+  const d=document.createElement("div"); d.className="titlebar";
+  d.innerHTML=`<h1>Код 29: отключение</h1><div class="meta mono"><span>патч кода 0x16A5</span><span>флаг 0x9D.7</span><span>проверка 0x6DD0, 0x16A8</span><span>✔ подтверждено кодом</span></div>
+  <div class="note">Код 29 ставится, когда коррекция топлива 0x160 (множитель обратной связи по O2, 0x8000 = ×1.00) выходит за пределы 0x5D80…0xBC30 (×0.73…×1.47). Проверка идёт на стоящей машине (скорость не выше 5 км/ч), а в движении — только под нагрузкой (MAP выше порога отсечки при сбросе газа 0x53CF/0x53DB плюс 0x20); при пуске, неисправности EACV и ряде других условий она пропускается. Обычно это значит, что смесь сильно уходит от расчётной: подсос воздуха, давление топлива, форсунки, датчик O2 — или тюнинг, после которого топливные карты не совпадают с мотором. В списке кодов мануала кода 29 нет.</div>`;
+  wrap.append(d);
+  if(preview){ const n=document.createElement("div"); n.className="note"; n.textContent="Загрузите прошивку, чтобы отключить или вернуть код 29."; d.append(n); return wrap; }
+  const st=c29State(S.cur), o=c29State(S.orig);
+  const NAME={on:"проверка работает (стоковый код)", off:"код 29 отключён", unknown:"код изменён иначе"};
+  const pn=document.createElement("div"); pn.className="panel"; pn.style.maxWidth="640px"; pn.innerHTML="<h2>Настройка</h2>";
+  const status=document.createElement("p"); status.style.margin="0 0 10px";
+  status.innerHTML = st==="on" ? `<b style="color:var(--good)">Включён:</b> проверка коррекции топлива работает как в стоке.`
+    : st==="off" ? `<b style="color:var(--changed)">Отключён:</b> проверка пропускается, флаг кода 29 (0x9D.7) всегда сброшен. Сама коррекция по O2 работает как прежде.`
+    : `<b style="color:var(--bad)">Неизвестное состояние:</b> байты 0x16A5–0x16A7 = ${[0,1,2].map(i=>hex(S.cur[C29.a+i],2)).join(" ")}, ожидалось 03 D0 6D (сток) или 03 B7 16 (патч).`;
+  if(o!==st){ const s=document.createElement("span"); s.className="axisnote"; s.textContent=` В исходном файле: ${NAME[o]}.`; status.append(s); }
+  pn.append(status);
+  const lab=document.createElement("label"); lab.className="toggle";
+  lab.innerHTML=`<input type="checkbox" ${st==="on"?"checked":""} ${st==="unknown"?"disabled":""}> Код 29 включён`;
+  lab.querySelector("input").onchange=e=>{
+    const k=e.target.checked?"on":"off";
+    if(applyEdits(C29[k].map((v,i)=>({a:C29.a+i, w:1, v})), k==="on"?"код 29: включён":"код 29: отключён")) toast(k==="on"?"Код 29 включён (стоковый код)":"Код 29 отключён (патч 0x16A5)");
+  };
+  pn.append(lab);
+  const hint=document.createElement("p"); hint.className="axisnote"; hint.style.margin="10px 0 0";
+  hint.textContent=`0x16A5: ${C29.on.map(v=>hex(v,2)).join(" ")} (${C29.on_s}) → ${C29.off.map(v=>hex(v,2)).join(" ")} (${C29.off_s}). Переход ведёт сразу на ветку «нет неисправности» (RC; флаг 0x9D.7 = 0). Байты одинаковы во всех изученных прошивках P13.`;
+  pn.append(hint);
+  const w2=document.createElement("div"); w2.className="msg warn"; w2.style.marginTop="10px";
+  w2.textContent="Код 29 предупреждает о реальной проблеме со смесью. Отключайте, только если причина известна (например, после тюнинга коррекция стабильно у предела), и проверяйте смесь широкополосным лямбда-зондом. В машине патч не проверялся.";
   pn.append(w2);
   wrap.append(pn);
   return wrap;
