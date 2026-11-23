@@ -195,6 +195,15 @@ const SPD = { rpm:0x2EA4, lim:0x2EAC, cfg:0x6CFF, idx:0x6D56, idxN:26, rpmOn:200
 CATALOG.push({a:SPD.rpm, n:SPD.lim-SPD.rpm+1, f:"feat", x:"", g:G_FEAT, t:"Ограничитель скорости", c:"✔", u:"", hi:false, id:"VMAX", feat:true,
   bytes:[SPD.rpm, SPD.lim], pane:speedPane,
   d:"Включение/выключение и лимит в км/ч. Лимит — байт 0x2EAC, порог оборотов — байт 0x2EA4; выключение ставит 0x2EA4 = 255, как в стоковой USDM-прошивке"});
+// Checksum (code 4B) is verified in two places: at cold start (0x09DB) and periodically while running (0x0D22)
+const CRC = { sites:[ {a:0x09DB, on:[0xC9], off:[0xCB], name:"при старте", on_s:"JEQ 0x09EA", off_s:"SJ 0x09EA"},
+                      {a:0x0D22, on:[0x90,0x9D,0xF1,0x7F], off:[0x03,0x36,0x0D,0x00], name:"во время работы", on_s:"LCB A, 0x7FF1", off_s:"J 0x0D36"} ] };
+function crcSite(buf,s){ const m=k=>s[k].every((v,i)=>buf[s.a+i]===v); return m("on")?"on":m("off")?"off":"unknown"; }
+function crcState(buf){ const st=CRC.sites.map(s=>crcSite(buf,s)); const flagOff=buf[CKSUM_FLAG]===0;
+  return {st, flagOff, unknown:st.includes("unknown"), allOff: flagOff || st.every(x=>x==="off"), anyOff: st.includes("off")}; }
+CATALOG.push({a:0x09DB, n:1, f:"feat", x:"", g:G_FEAT, t:"Проверка контрольной суммы (CRC)", c:"✔", u:"", hi:false, id:"CRC", feat:true,
+  bytes:CRC.sites.flatMap(s=>s.on.map((_,i)=>s.a+i)), pane:crcPane,
+  d:"Отключение обеих проверок суммы ROM (код 4B) патчем кода: при старте (0x09DB) и во время работы (0x0D22)"});
 // EGR off = two code patches: skip the target-lift calculation (0x34A1) and the lift-sensor high check (0x3A76)
 const EGR = { patches:[ {a:0x34A1, on:[0xDA,0x1E,0x09], off:[0x03,0x75,0x35], on_s:"JBR 0x11E.2, 0x34AD", off_s:"J 0x3575"},
                         {a:0x3A76, on:[0xEB,0x11,0x0E], off:[0xCB,0x0F,0x00], on_s:"JBS 0x211.3, 0x3A87", off_s:"SJ 0x3A87"} ] };
@@ -313,7 +322,7 @@ function renderHeader(){
     const ck=sum(S.cur), flag=S.cur[CKSUM_FLAG];
     if(ck===0) pill("сумма OK","ok","Сумма всех байт по модулю 256 равна 0");
     else pill(`сумма ${hex(ck,2)}`, S.fixCk?"chg":"bad", S.fixCk?"Будет исправлена при скачивании через байт 0x3A":"ECU с включённой проверкой не запустится (код 4B)");
-    pill(flag===0?"проверка суммы ECU выкл.":"проверка суммы ECU вкл.","", "Байт 0x7FF1: 00 — ECU не проверяет контрольную сумму");
+    const cs=crcState(S.cur); pill(cs.allOff?"проверка суммы ECU выкл.":cs.anyOff?"проверка суммы ECU: частично":"проверка суммы ECU вкл.", cs.anyOff&&!cs.allOff?"bad":"", cs.flagOff?"Байт 0x7FF1 = 00 — ECU не проверяет контрольную сумму":"Проверки суммы в коде: при старте 0x09DB и во время работы 0x0D22 (см. «Быстрые настройки»)");
     let changed=0; for(let i=0;i<ROMSIZE;i++) if(S.cur[i]!==S.orig[i]) changed++;
     if(changed) pill(`изменено байт: ${changed}`,"chg");
     if(S.ref) pill(`эталон: ${S.refName}`,"","Отличия от эталона отмечены фиолетовым");
@@ -374,7 +383,7 @@ function emptyState(){
   d.innerHTML=`<h1>Откройте прошивку P13</h1>
   <p>Редактор работает с 32-килобайтным образом ROM Honda P13 (OKI M66911). Файл никуда не отправляется: он читается и изменяется прямо в браузере.</p>
   <ul><li>${CATALOG.filter(t=>!t.feat).length} таблиц с установленным назначением: основные карты топлива и зажигания, оси RPM и нагрузки, VTEC, ограничитель оборотов, коррекции</li>
-  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит) и отключение EGR</li>
+  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит), отключение EGR и проверки контрольной суммы</li>
   <li>отмена и повтор, сравнение с эталонной прошивкой, вставка из Excel</li>
   <li>при скачивании контрольная сумма исправляется автоматически</li></ul>
   <label class="btn primary" for="fileIn2">Выбрать файл .bin<input type="file" id="fileIn2" accept=".bin,.BIN,application/octet-stream"></label>
@@ -447,6 +456,47 @@ function speedPane(preview){
     w.textContent="В этой прошивке ограничитель отключён таблицей конфигурации (бит 0x11F.0 = 0 во всех вариантах платы, как в USDM), поэтому байты 0x2EA4/0x2EAC на работу не влияют. Тот же бит управляет и другой функцией (код 0x3061), поэтому редактор его не меняет."; pn.append(w); }
   else if(st.c.off>0){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
     w.textContent="В части вариантов конфигурации платы ограничитель отключён (бит 0x11F.0 = 0): работает он или нет, зависит от перемычек на конкретной плате."; pn.append(w); }
+  wrap.append(pn);
+  return wrap;
+}
+
+/* ---------- checksum check quick setting ---------- */
+function crcPane(preview){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="14px";
+  const d=document.createElement("div"); d.className="titlebar";
+  d.innerHTML=`<h1>Проверка контрольной суммы (CRC)</h1><div class="meta mono"><span>патч кода 0x09DB, 0x0D22</span><span>флаг 0x7FF1</span><span>✔ подтверждено кодом</span></div>
+  <div class="note">ЭБУ требует, чтобы сумма всех байт ROM была равна 0, и проверяет это в двух местах: при старте после потери питания (0x09DB — отключали АКБ, разъём, меняли чип) и периодически во время работы (0x0D22). При ошибке он перезапускается с кодом 4B. Распространённый патч 03 36 0D 00 в 0x0D22 убирает только вторую проверку — после отключения АКБ такая прошивка с неверной суммой не запустится.</div>`;
+  wrap.append(d);
+  if(preview){ const n=document.createElement("div"); n.className="note"; n.textContent="Загрузите прошивку, чтобы включить или отключить проверку."; d.append(n); return wrap; }
+  const c=crcState(S.cur), o=crcState(S.orig), s=sum(S.cur);
+  const desc=x=> x.flagOff ? "выключена флагом 0x7FF1 = 0" : x.unknown ? "код изменён иначе" : x.allOff ? "отключена патчем (обе проверки)" : x.anyOff ? "отключена только "+CRC.sites.filter((_,i)=>x.st[i]==="off").map(z=>z.name).join(", ") : "включена (сток)";
+  const pn=document.createElement("div"); pn.className="panel"; pn.style.maxWidth="640px"; pn.innerHTML="<h2>Настройка</h2>";
+  const status=document.createElement("p"); status.style.margin="0 0 10px";
+  status.innerHTML = `<b style="color:${c.allOff?"var(--changed)":c.anyOff||c.unknown?"var(--bad)":"var(--good)"}">Проверка ${desc(c)}.</b> Сумма сейчас: <span class="mono">${hex(s,2)}</span>${s===0?" (OK)":S.fixCk?" — будет исправлена при скачивании (байт 0x3A)":" — неверная"}.`;
+  if(desc(o)!==desc(c)){ const z=document.createElement("span"); z.className="axisnote"; z.textContent=` В исходном файле: ${desc(o)}.`; status.append(z); }
+  pn.append(status);
+  const kv=document.createElement("dl"); kv.className="kv mono"; kv.style.marginBottom="10px";
+  kv.innerHTML=CRC.sites.map((z,i)=>`<dt>0x${hex(z.a)} ${z.name}</dt><dd>${z.on.map((_,k)=>hex(S.cur[z.a+k],2)).join(" ")} — ${c.st[i]==="on"?"проверка ("+z.on_s+")":c.st[i]==="off"?"обход ("+z.off_s+")":"неизвестный код"}</dd>`).join("");
+  pn.append(kv);
+  const lab=document.createElement("label"); lab.className="toggle";
+  const dis = c.unknown || c.flagOff;
+  lab.innerHTML=`<input type="checkbox" ${c.allOff?"":"checked"} ${dis?"disabled":""}> Проверка контрольной суммы включена`;
+  lab.querySelector("input").onchange=e=>{
+    const k=e.target.checked?"on":"off", ed=[];
+    for(const z of CRC.sites) z[k].forEach((v,i)=>ed.push({a:z.a+i, w:1, v}));
+    if(applyEdits(ed, k==="on"?"CRC: проверка включена":"CRC: проверка отключена")) toast(k==="on"?"Проверка контрольной суммы включена (стоковый код)":"Проверка контрольной суммы отключена (патч 0x09DB, 0x0D22)");
+  };
+  pn.append(lab);
+  const hint=document.createElement("p"); hint.className="axisnote"; hint.style.margin="10px 0 0";
+  hint.textContent = CRC.sites.map(z=>`0x${hex(z.a)}: ${z.on.map(v=>hex(v,2)).join(" ")} (${z.on_s}) → ${z.off.map(v=>hex(v,2)).join(" ")} (${z.off_s})`).join("; ")
+    + ". Флаг 0x7FF1 = 0 тоже выключает проверку, но одновременно заставляет ЭБУ брать вариант конфигурации из 0x7FF2 вместо кодирующих входов, поэтому редактор использует патч кода. Исправление суммы при скачивании от этой настройки не зависит.";
+  pn.append(hint);
+  if(c.anyOff && !c.allOff){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
+    w.textContent="Отключена только одна проверка. Если сумма неверна, ЭБУ остановится с кодом 4B на оставшейся. Снимите галочку, чтобы отключить обе, или скачайте файл с исправленной суммой."; pn.append(w); }
+  if(c.flagOff){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
+    w.textContent="0x7FF1 = 0: проверка уже выключена флагом, и вариант конфигурации берётся из 0x7FF2. Переключатель недоступен — меняйте байт 0x7FF1 в таблице 0x7FF0, если нужно."; pn.append(w); }
+  if(c.unknown){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
+    w.textContent="Байты в одном из мест не совпадают ни со стоком, ни с патчем — переключатель недоступен, чтобы не испортить чужой патч."; pn.append(w); }
   wrap.append(pn);
   return wrap;
 }
@@ -821,7 +871,7 @@ function sidePanels(t){
   const ck=document.createElement("div"); ck.className="panel"; ck.innerHTML="<h2>Контрольная сумма</h2>";
   const s=sum(S.cur);
   const kv=document.createElement("dl"); kv.className="kv mono";
-  kv.innerHTML=`<dt>сумма байт</dt><dd>${hex(s,2)} ${s===0?"(OK)":"(должна быть 00)"}</dd><dt>байт 0x3A</dt><dd>${hex(S.cur[CKSUM_FIX],2)}${S.cur[CKSUM_FIX]!==S.orig[CKSUM_FIX]?" (было "+hex(S.orig[CKSUM_FIX],2)+")":""}</dd><dt>0x7FF1</dt><dd>${hex(S.cur[CKSUM_FLAG],2)} — проверка ${S.cur[CKSUM_FLAG]?"включена":"выключена"}</dd>`;
+  kv.innerHTML=`<dt>сумма байт</dt><dd>${hex(s,2)} ${s===0?"(OK)":"(должна быть 00)"}</dd><dt>байт 0x3A</dt><dd>${hex(S.cur[CKSUM_FIX],2)}${S.cur[CKSUM_FIX]!==S.orig[CKSUM_FIX]?" (было "+hex(S.orig[CKSUM_FIX],2)+")":""}</dd><dt>0x7FF1</dt><dd>${hex(S.cur[CKSUM_FLAG],2)}${S.cur[CKSUM_FLAG]?"":" — проверка выключена флагом"}</dd><dt>код</dt><dd>${CRC.sites.map((z,i)=>z.name+": "+({on:"проверка",off:"обход",unknown:"?"})[crcState(S.cur).st[i]]).join(", ")}</dd>`;
   ck.append(kv);
   const lab=document.createElement("label"); lab.className="toggle"; lab.style.marginTop="8px";
   lab.innerHTML=`<input type="checkbox" id="fixCk" ${S.fixCk?"checked":""}> Исправлять сумму при скачивании (байт 0x3A)`;
