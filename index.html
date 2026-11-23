@@ -210,17 +210,27 @@ const EGR = { patches:[ {a:0x34A1, on:[0xDA,0x1E,0x09], off:[0x03,0x75,0x35], on
 CATALOG.push({a:0x34A1, n:3, f:"feat", x:"", g:G_FEAT, t:"EGR: отключение", c:"~", u:"", hi:false, id:"EGR", feat:true,
   bytes:EGR.patches.flatMap(p=>p.on.map((_,i)=>p.a+i)), pane:egrPane,
   d:"Отключение рециркуляции отработавших газов патчем кода в 0x34A1 и 0x3A76: цель подъёма клапана всегда 0, соленоид выключен, проверка датчика подъёма пропущена"});
-// ELD off = clear config bit r_cfg.2 for every board variant: mask operand of ANDB A,#imm at 0x0FF0 (0x5D -> 0x59)
-const ELD = { a:0x0FF1, on:0x5D, off:0x59 };
-function eldState(buf){ const v=buf[ELD.a]; return buf[ELD.a-1]!==0xD6 ? "unknown" : v===ELD.on ? "on" : v===ELD.off ? "off" : "unknown"; }
-function eldCfg(buf){
+// Config-bit switches: byte 2 of the board variant reaches r_cfg (0x220) through ANDB A,#imm at 0x0FF0 (stock mask 0x5D).
+// Clearing a bit of that mask turns the feature off for every variant: 0x04 -> r_cfg.2 (ELD), 0x10 -> r_cfg.4 (TCS).
+const CFGM = { a:0x0FF1, op:0xD6, stock:0x5D, own:0x14 };
+const ELD = { bit:0x04 };
+const TCS = { bit:0x10 };
+function cfgMaskOk(buf){ return buf[CFGM.a-1]===CFGM.op && (buf[CFGM.a] & ~CFGM.own & 0xFF)===(CFGM.stock & ~CFGM.own & 0xFF); }
+function cfgBitState(buf,bit){ return !cfgMaskOk(buf) ? "unknown" : (buf[CFGM.a]&bit) ? "on" : "off"; }
+function cfgBitSet(bit,on){ const v=S.cur[CFGM.a]; return {a:CFGM.a, w:1, v: on ? v|bit : v&~bit&0xFF}; }
+function cfgVariants(buf,bit){
   const vs=new Set(); for(let i=0;i<SPD.idxN;i++){ const x=buf[SPD.idx+i]; if(x!==0xFF) vs.add(x); }
-  let on=0, off=0; for(const x of vs){ if(buf[SPD.cfg+4*x+2]&4) on++; else off++; }
+  let on=0, off=0; for(const x of vs){ if(buf[SPD.cfg+4*x+2]&bit) on++; else off++; }
   return {on, off};
 }
-CATALOG.push({a:ELD.a, n:1, f:"feat", x:"", g:G_FEAT, t:"ELD: отключение", c:"✔", u:"", hi:false, id:"ELD", feat:true,
-  bytes:[ELD.a], pane:eldPane,
-  d:"Работа без датчика электрической нагрузки (ELD): байт 0x0FF1 сбрасывает бит конфигурации r_cfg.2 — ЭБУ ведёт себя как плата без ELD, ошибка ELD не записывается"});
+const eldState = buf => cfgBitState(buf, ELD.bit);
+const eldCfg = buf => cfgVariants(buf, ELD.bit);
+CATALOG.push({a:CFGM.a, n:1, f:"feat", x:"", g:G_FEAT, t:"ELD: отключение", c:"✔", u:"", hi:false, id:"ELD", feat:true,
+  bytes:[CFGM.a], bits:ELD.bit, pane:eldPane,
+  d:"Работа без датчика электрической нагрузки (ELD): бит 0x04 байта 0x0FF1 сбрасывает бит конфигурации r_cfg.2 — ЭБУ ведёт себя как плата без ELD, ошибка ELD не записывается"});
+CATALOG.push({a:CFGM.a, n:1, f:"feat", x:"", g:G_FEAT, t:"TCS: отключение", c:"✔", u:"", hi:false, id:"TCS", feat:true,
+  bytes:[CFGM.a], bits:TCS.bit, pane:tcsPane,
+  d:"Отключение антипробуксовки: бит 0x10 байта 0x0FF1 сбрасывает бит конфигурации r_cfg.4 — ЭБУ не принимает запросы блока TCS и не проверяет его линии"});
 /* Sensor scales (estimates): ECT/IAT thermistor curve from the service manual (beta model, R25 ≈ 2.04 kΩ, B ≈ 3546)
    with the ECU pull-up of 1.46 kΩ (measured: D13/D15 → +5 V, resistor network RM8);
    MAP/BARO byte from the manual's sensor line (0.55 V vacuum … 2.95 V atmosphere) and the code's (raw−24)·2 scaling. */
@@ -280,7 +290,7 @@ function layout(t){
   }
 }
 function tableBytes(t){ return [t.a, t.a + t.n]; }
-function diffCount(a,b,t){ if(!a||!b) return 0; if(t.bytes) return t.bytes.filter(i=>a[i]!==b[i]).length; let c=0; for(let i=t.a;i<t.a+t.n && i<ROMSIZE;i++) if(a[i]!==b[i]) c++; return c; }
+function diffCount(a,b,t){ if(!a||!b) return 0; if(t.bits) return t.bytes.filter(i=>(a[i]^b[i])&t.bits).length; if(t.bytes) return t.bytes.filter(i=>a[i]!==b[i]).length; let c=0; for(let i=t.a;i<t.a+t.n && i<ROMSIZE;i++) if(a[i]!==b[i]) c++; return c; }
 function rpmAxis(buf,hi){ const base=hi?0x6028:0x6000; const r=[]; for(let i=0;i<20;i++) r.push(per2rpm(rd(buf,base+2*i,2))); return r; }
 
 /* ---------- edits with undo ---------- */
@@ -395,7 +405,7 @@ function emptyState(){
   d.innerHTML=`<h1>Откройте прошивку P13</h1>
   <p>Редактор работает с 32-килобайтным образом ROM Honda P13 (OKI M66911). Файл никуда не отправляется: он читается и изменяется прямо в браузере.</p>
   <ul><li>${CATALOG.filter(t=>!t.feat).length} таблиц с установленным назначением: основные карты топлива и зажигания, оси RPM и нагрузки, VTEC, ограничитель оборотов, коррекции</li>
-  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит), отключение EGR, ELD и проверки контрольной суммы</li>
+  <li>быстрые настройки: ограничитель скорости (включение, выключение, лимит), отключение EGR, ELD, TCS и проверки контрольной суммы</li>
   <li>отмена и повтор, сравнение с эталонной прошивкой, вставка из Excel</li>
   <li>при скачивании контрольная сумма исправляется автоматически</li></ul>
   <label class="btn primary" for="fileIn2">Выбрать файл .bin<input type="file" id="fileIn2" accept=".bin,.BIN,application/octet-stream"></label>
@@ -527,23 +537,63 @@ function eldPane(preview){
   const status=document.createElement("p"); status.style.margin="0 0 10px";
   status.innerHTML = st==="on" ? `<b style="color:var(--good)">Включён:</b> ELD используется, если его включает вариант конфигурации платы (сейчас — в ${cf.on} из ${cf.on+cf.off} допустимых вариантов).`
     : st==="off" ? `<b style="color:var(--changed)">Отключён:</b> бит 0x220.2 сброшен во всех вариантах. ELD не читается и не проверяется, вместо его сигнала подставляется константа 0x25; поправка холостого хода по ELD и управление генератором выключены — как на плате без ELD.`
-    : `<b style="color:var(--bad)">Неизвестное состояние:</b> байты 0x0FF0–0x0FF1 = ${hex(S.cur[ELD.a-1],2)} ${hex(S.cur[ELD.a],2)}, ожидалось D6 5D (сток) или D6 59 (патч).`;
+    : `<b style="color:var(--bad)">Неизвестное состояние:</b> байты 0x0FF0–0x0FF1 = ${hex(S.cur[CFGM.a-1],2)} ${hex(S.cur[CFGM.a],2)}, ожидалось D6 и маска 5D с возможными сброшенными битами 0x04 (ELD) и 0x10 (TCS).`;
   if(o!==st){ const s=document.createElement("span"); s.className="axisnote"; s.textContent=` В исходном файле: ${NAME[o]}.`; status.append(s); }
   pn.append(status);
   const lab=document.createElement("label"); lab.className="toggle";
   lab.innerHTML=`<input type="checkbox" ${st==="on"?"checked":""} ${st==="unknown"?"disabled":""}> ELD используется`;
   lab.querySelector("input").onchange=e=>{
     const k=e.target.checked?"on":"off";
-    if(applyEdits([{a:ELD.a, w:1, v:ELD[k]}], k==="on"?"ELD: включён":"ELD: отключён")) toast(k==="on"?"ELD включён (стоковый код)":"ELD отключён (0x0FF1 = 59)");
+    if(applyEdits([cfgBitSet(ELD.bit, k==="on")], k==="on"?"ELD: включён":"ELD: отключён")) toast(k==="on"?"ELD включён (бит 0x04 маски 0x0FF1)":"ELD отключён (бит 0x04 маски 0x0FF1 сброшен)");
   };
   pn.append(lab);
   const hint=document.createElement("p"); hint.className="axisnote"; hint.style.margin="10px 0 0";
-  hint.textContent="0x0FF0: D6 5D (ANDB A, #5Dh) → D6 59 (ANDB A, #59h). Это маска, через которую байт 2 варианта конфигурации попадает в 0x220, поэтому патч действует при любом варианте платы, в том числе при принудительном варианте 0x7FF2. Другие биты конфигурации не меняются. Затронутый код: чтение ELD и его неисправность (0x186D), поправка холостого хода (0x1455, 0x3C19), управление генератором (0x1C1E), порог ECT (0x4FAD). Байты одинаковы во всех изученных прошивках P13.";
+  hint.textContent="0x0FF0: D6 5D (ANDB A, #5Dh) → D6 59 (ANDB A, #59h; при отключённой TCS — 4D → 49). Это маска, через которую байт 2 варианта конфигурации попадает в 0x220, поэтому патч действует при любом варианте платы, в том числе при принудительном варианте 0x7FF2. Другие биты конфигурации не меняются. Затронутый код: чтение ELD и его неисправность (0x186D), поправка холостого хода (0x1455, 0x3C19), управление генератором (0x1C1E), порог ECT (0x4FAD). Байты одинаковы во всех изученных прошивках P13.";
   pn.append(hint);
   if(st==="on" && cf.on===0){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
     w.textContent="В этой прошивке ELD уже выключен во всех допустимых вариантах конфигурации — патч ничего не изменит."; pn.append(w); }
   const w2=document.createElement("div"); w2.className="msg warn"; w2.style.marginTop="10px";
   w2.textContent="Отключайте, только если ELD физически нет или он не подключён. Без ELD холостой ход не поднимается при включении фар, вентилятора и других потребителей — обороты могут проседать сильнее. Ошибка, уже записанная в память, стирается обычным способом (снять питание ЭБУ). В машине патч не проверялся.";
+  pn.append(w2);
+  wrap.append(pn);
+  return wrap;
+}
+
+/* ---------- TCS quick setting ---------- */
+function tcsPane(preview){
+  const wrap=document.createElement("div"); wrap.style.display="flex"; wrap.style.flexDirection="column"; wrap.style.gap="14px";
+  const d=document.createElement("div"); d.className="titlebar";
+  d.innerHTML=`<h1>TCS: отключение</h1><div class="meta mono"><span>патч кода 0x0FF1</span><span>бит конфигурации 0x220.4</span><span>запрос — АЦП 0x73 → 0xDE, резерв — 0x8000.3</span><span>✔ подтверждено кодом</span></div>
+  <div class="note">Блок TCS ставили на редкие JDM-комплектации. Работает ли TCS, решает бит 0x220.4 из варианта конфигурации платы (байт 2 в 0x6CFF): в JDM он есть только у варианта 6 (кодирующий вход АЦП 0x3D9 ≈ 3.75 В). С ним ЭБУ по запросу блока TCS снижает угол и пропускает часть впрысков (группа «10. TCS»), а также проверяет линии блока: если блок снят или отключён, записываются неисправности pr3_X2H.0/.1, и TCS блокируется.</div>`;
+  wrap.append(d);
+  if(preview){ const n=document.createElement("div"); n.className="note"; n.textContent="Загрузите прошивку, чтобы отключить или вернуть TCS."; d.append(n); return wrap; }
+  const st=cfgBitState(S.cur,TCS.bit), o=cfgBitState(S.orig,TCS.bit), cf=cfgVariants(S.cur,TCS.bit);
+  const NAME={on:"TCS разрешена (стоковый код)", off:"TCS отключена", unknown:"код изменён иначе"};
+  const pn=document.createElement("div"); pn.className="panel"; pn.style.maxWidth="640px"; pn.innerHTML="<h2>Настройка</h2>";
+  const status=document.createElement("p"); status.style.margin="0 0 10px";
+  status.innerHTML = st==="on" ? `<b style="color:var(--good)">Разрешена:</b> TCS работает, если её включает вариант конфигурации платы (сейчас — в ${cf.on} из ${cf.on+cf.off} допустимых вариантов).`
+    : st==="off" ? `<b style="color:var(--changed)">Отключена:</b> бит 0x220.4 сброшен во всех вариантах. Запросы блока TCS не принимаются — нет ни снижения угла, ни пропуска впрысков; линии блока не проверяются, неисправности TCS не записываются.`
+    : `<b style="color:var(--bad)">Неизвестное состояние:</b> байты 0x0FF0–0x0FF1 = ${hex(S.cur[CFGM.a-1],2)} ${hex(S.cur[CFGM.a],2)}, ожидалось D6 и маска 5D с возможными сброшенными битами 0x04 (ELD) и 0x10 (TCS).`;
+  if(o!==st){ const s=document.createElement("span"); s.className="axisnote"; s.textContent=` В исходном файле: ${NAME[o]}.`; status.append(s); }
+  pn.append(status);
+  const lab=document.createElement("label"); lab.className="toggle";
+  lab.innerHTML=`<input type="checkbox" ${st==="on"?"checked":""} ${st==="unknown"?"disabled":""}> TCS разрешена`;
+  lab.querySelector("input").onchange=e=>{
+    const k=e.target.checked?"on":"off";
+    if(applyEdits([cfgBitSet(TCS.bit, k==="on")], k==="on"?"TCS: разрешена":"TCS: отключена")) toast(k==="on"?"TCS разрешена (бит 0x10 маски 0x0FF1)":"TCS отключена (бит 0x10 маски 0x0FF1 сброшен)");
+  };
+  pn.append(lab);
+  const go=document.createElement("div"); go.style.cssText="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px";
+  go.innerHTML=`<span class="axisnote">Таблицы TCS:</span>`;
+  for(const [id,txt] of [["5722","угол при отсечке"],["6974","угол при уровне 1"],["69B0","пороги"],["69C8","маски впрысков"]]){ const b=document.createElement("button"); b.className="btn small"; b.textContent=txt; b.onclick=()=>{ S.sel=id; S.cell=null; refresh(); }; go.append(b); }
+  pn.append(go);
+  const hint=document.createElement("p"); hint.className="axisnote"; hint.style.margin="10px 0 0";
+  hint.textContent="0x0FF0: D6 5D (ANDB A, #5Dh) → D6 4D (ANDB A, #4Dh; при отключённом ELD — 59 → 49). Это та же маска, что и у переключателя ELD: через неё байт 2 варианта конфигурации попадает в 0x220, поэтому патч действует при любом варианте платы, в том числе при принудительном варианте 0x7FF2. Другие биты конфигурации не меняются. Затронутый код: логика TCS (0x2850–0x2948), проверка линий и блокировка (0x1A4E–0x1A85, 0x429C). Байты одинаковы во всех изученных прошивках P13.";
+  pn.append(hint);
+  if(st==="on" && cf.on===0){ const w=document.createElement("div"); w.className="msg warn"; w.style.marginTop="10px";
+    w.textContent="В этой прошивке TCS уже выключена во всех допустимых вариантах конфигурации (машина без TCS) — патч ничего не изменит."; pn.append(w); }
+  const w2=document.createElement("div"); w2.className="msg warn"; w2.style.marginTop="10px";
+  w2.textContent="Нужно, если плата закодирована под TCS (вариант 6), а блок TCS снят или не работает. Без TCS ЭБУ не ограничивает мощность при пробуксовке. В машине патч не проверялся.";
   pn.append(w2);
   wrap.append(pn);
   return wrap;
@@ -913,7 +963,7 @@ function sidePanels(t){
   if(!any){ const p=document.createElement("div"); p.className="axisnote"; p.textContent="Пока ничего не изменено."; lst.append(p); }
   ch.append(lst);
   if(any){ const r=document.createElement("button"); r.className="btn small"; r.style.marginTop="8px"; r.textContent="Сбросить эту таблицу";
-    r.onclick=()=>{ const list=[]; for(const a of (t.bytes||Array.from({length:t.n},(_,i)=>t.a+i))) list.push({a,w:1,v:S.orig[a]}); if(!applyEdits(list,`${t.id}: сброс`)) toast("В этой таблице нет изменений"); }; ch.append(r); }
+    r.onclick=()=>{ const list=[]; for(const a of (t.bytes||Array.from({length:t.n},(_,i)=>t.a+i))) list.push({a,w:1,v:t.bits?(S.cur[a]&~t.bits&0xFF)|(S.orig[a]&t.bits):S.orig[a]}); if(!applyEdits(list,`${t.id}: сброс`)) toast("В этой таблице нет изменений"); }; ch.append(r); }
   box.append(ch);
   // checksum + options
   const ck=document.createElement("div"); ck.className="panel"; ck.innerHTML="<h2>Контрольная сумма</h2>";
